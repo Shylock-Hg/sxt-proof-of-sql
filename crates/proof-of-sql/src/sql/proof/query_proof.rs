@@ -5,13 +5,13 @@ use super::{
 use crate::{
     base::{
         bit::BitDistribution,
-        commitment::CommitmentEvaluationProof,
+        commitment::{Commitment, CommitmentEvaluationProof},
         database::{
             ColumnRef, CommitmentAccessor, DataAccessor, MetadataAccessor, Table, TableRef,
         },
         map::{IndexMap, IndexSet},
         math::log2_up,
-        polynomial::{compute_evaluation_vector, CompositePolynomialInfo},
+        polynomial::compute_evaluation_vector,
         proof::{Keccak256Transcript, ProofError, Transcript},
     },
     proof_primitive::sumcheck::SumcheckProof,
@@ -49,7 +49,7 @@ fn get_index_range<'a>(
 /// cannot maintain any invariant on its data members; hence, they are
 /// all public so as to allow for easy manipulation for testing.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct QueryProof<CP: CommitmentEvaluationProof> {
+pub(super) struct QueryProof<CP: CommitmentEvaluationProof> {
     /// Bit distributions
     pub bit_distributions: Vec<BitDistribution>,
     /// One evaluation lengths
@@ -92,13 +92,12 @@ impl<CP: CommitmentEvaluationProof> QueryProof<CP> {
             })
             .collect();
 
-        // Evaluate query result
-        let (query_result, one_evaluation_lengths) = expr.result_evaluate(&alloc, &table_map);
-        let provable_result = query_result.into();
-
-        // Prover First Round
+        // Prover First Round: Evaluate the query && get the right number of post result challenges
         let mut first_round_builder = FirstRoundBuilder::new();
-        expr.first_round_evaluate(&mut first_round_builder);
+        let query_result = expr.first_round_evaluate(&mut first_round_builder, &alloc, &table_map);
+        let provable_result = query_result.into();
+        let one_evaluation_lengths = first_round_builder.one_evaluation_lengths();
+
         let range_length = one_evaluation_lengths
             .iter()
             .copied()
@@ -115,7 +114,7 @@ impl<CP: CommitmentEvaluationProof> QueryProof<CP> {
             &provable_result,
             range_length,
             min_row_num,
-            &one_evaluation_lengths,
+            one_evaluation_lengths,
         );
 
         // These are the challenges that will be consumed by the proof
@@ -192,7 +191,7 @@ impl<CP: CommitmentEvaluationProof> QueryProof<CP> {
 
         let proof = Self {
             bit_distributions: builder.bit_distributions().to_vec(),
-            one_evaluation_lengths,
+            one_evaluation_lengths: one_evaluation_lengths.to_vec(),
             commitments,
             sumcheck_proof,
             pcs_proof_evaluations,
@@ -205,10 +204,10 @@ impl<CP: CommitmentEvaluationProof> QueryProof<CP> {
     #[tracing::instrument(name = "QueryProof::verify", level = "debug", skip_all, err)]
     /// Verify a `QueryProof`. Note: This does NOT transform the result!
     pub fn verify(
-        &self,
+        self,
         expr: &(impl ProofPlan + Serialize),
         accessor: &impl CommitmentAccessor<CP::Commitment>,
-        result: &ProvableQueryResult,
+        result: ProvableQueryResult,
         setup: &CP::VerifierPublicSetup<'_>,
     ) -> QueryResult<CP::Scalar> {
         let owned_table_result = result.to_owned_table(&expr.get_column_result_fields())?;
@@ -244,7 +243,7 @@ impl<CP: CommitmentEvaluationProof> QueryProof<CP> {
         // construct a transcript for the proof
         let mut transcript: Keccak256Transcript = make_transcript(
             expr,
-            result,
+            &result,
             self.range_length,
             min_row_num,
             &self.one_evaluation_lengths,
@@ -273,15 +272,12 @@ impl<CP: CommitmentEvaluationProof> QueryProof<CP> {
             SumcheckRandomScalars::new(&random_scalars, self.range_length, num_sumcheck_variables);
 
         // verify sumcheck up to the evaluation check
-        let poly_info = CompositePolynomialInfo {
-            // This needs to be at least 2 since `CompositePolynomialBuilder::make_composite_polynomial`
-            // always adds a degree 2 term.
-            max_multiplicands: core::cmp::max(counts.sumcheck_max_multiplicands, 2),
-            num_variables: num_sumcheck_variables,
-        };
         let subclaim = self.sumcheck_proof.verify_without_evaluation(
             &mut transcript,
-            poly_info,
+            // This needs to be at least 2 since `CompositePolynomialBuilder::make_composite_polynomial`
+            // always adds a degree 2 term.
+            core::cmp::max(counts.sumcheck_max_multiplicands, 2),
+            num_sumcheck_variables,
             &Zero::zero(),
         )?;
 
@@ -431,11 +427,13 @@ fn make_transcript<T: Transcript>(
     transcript
 }
 
-fn extend_transcript<C: serde::Serialize>(
+fn extend_transcript<C: Commitment>(
     transcript: &mut impl Transcript,
-    commitments: &C,
+    commitments: &[C],
     bit_distributions: &[BitDistribution],
 ) {
-    transcript.extend_serialize_as_le(commitments);
+    for commitment in commitments {
+        commitment.append_to_transcript(transcript);
+    }
     transcript.extend_serialize_as_le(bit_distributions);
 }
