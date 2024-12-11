@@ -39,7 +39,7 @@ pub use proof_plan::ProofPlan;
 pub(crate) use proof_plan::{HonestProver, ProverEvaluate, ProverHonestyMarker};
 
 mod query_proof;
-pub use query_proof::QueryProof;
+use query_proof::QueryProof;
 #[cfg(all(test, feature = "blitzar"))]
 mod query_proof_test;
 
@@ -71,3 +71,5 @@ pub(crate) use first_round_builder::FirstRoundBuilder;
 
 #[cfg(all(test, feature = "arrow"))]
 mod provable_query_result_test;
+
+mod make_sumcheck_state;

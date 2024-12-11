@@ -1,15 +1,17 @@
-use super::test_cases::sumcheck_test_cases;
-use crate::base::{
-    polynomial::{CompositePolynomial, CompositePolynomialInfo},
-    proof::Transcript as _,
-    scalar::{test_scalar::TestScalar, Curve25519Scalar, MontScalar, Scalar},
-};
 /*
  * Adopted from arkworks
  *
  * See third_party/license/arkworks.LICENSE
  */
-use crate::proof_primitive::sumcheck::proof::*;
+use super::test_cases::sumcheck_test_cases;
+use crate::{
+    base::{
+        polynomial::CompositePolynomial,
+        proof::Transcript as _,
+        scalar::{test_scalar::TestScalar, Curve25519Scalar, MontScalar, Scalar},
+    },
+    proof_primitive::sumcheck::{ProverState, SumcheckProof},
+};
 use alloc::rc::Rc;
 use ark_std::UniformRand;
 use merlin::Transcript;
@@ -29,14 +31,19 @@ fn test_create_verify_proof() {
     let fa = Rc::new(a_vec.to_vec());
     poly.add_product([fa], Curve25519Scalar::from(1u64));
     let mut transcript = Transcript::new(b"sumchecktest");
-    let mut proof = SumcheckProof::create(&mut transcript, &mut evaluation_point, &poly);
+    let mut proof = SumcheckProof::create(
+        &mut transcript,
+        &mut evaluation_point,
+        ProverState::create(&poly),
+    );
 
     // verify proof
     let mut transcript = Transcript::new(b"sumchecktest");
     let subclaim = proof
         .verify_without_evaluation(
             &mut transcript,
-            poly.info(),
+            poly.max_multiplicands,
+            poly.num_variables,
             &Curve25519Scalar::from(579u64),
         )
         .expect("verify failed");
@@ -52,7 +59,8 @@ fn test_create_verify_proof() {
     let subclaim = proof
         .verify_without_evaluation(
             &mut transcript,
-            poly.info(),
+            poly.max_multiplicands,
+            poly.num_variables,
             &Curve25519Scalar::from(579u64),
         )
         .expect("verify failed");
@@ -62,7 +70,8 @@ fn test_create_verify_proof() {
     let mut transcript = Transcript::new(b"sumchecktest");
     let subclaim = proof.verify_without_evaluation(
         &mut transcript,
-        poly.info(),
+        poly.max_multiplicands,
+        poly.num_variables,
         &Curve25519Scalar::from(123u64),
     );
     assert!(subclaim.is_err());
@@ -71,7 +80,8 @@ fn test_create_verify_proof() {
     proof.coefficients[0] += Curve25519Scalar::from(3u64);
     let subclaim = proof.verify_without_evaluation(
         &mut transcript,
-        poly.info(),
+        poly.max_multiplicands,
+        poly.num_variables,
         &Curve25519Scalar::from(579u64),
     );
     assert!(subclaim.is_err());
@@ -125,17 +135,25 @@ fn test_polynomial(nv: usize, num_multiplicands_range: (usize, usize), num_produ
     let mut rng = <ark_std::rand::rngs::StdRng as ark_std::rand::SeedableRng>::from_seed([0u8; 32]);
     let (poly, asserted_sum) =
         random_polynomial(nv, num_multiplicands_range, num_products, &mut rng);
-    let poly_info = poly.info();
 
     // create a proof
     let mut transcript = Transcript::new(b"sumchecktest");
-    let mut evaluation_point = vec![Curve25519Scalar::zero(); poly_info.num_variables];
-    let proof = SumcheckProof::create(&mut transcript, &mut evaluation_point, &poly);
+    let mut evaluation_point = vec![Curve25519Scalar::zero(); poly.num_variables];
+    let proof = SumcheckProof::create(
+        &mut transcript,
+        &mut evaluation_point,
+        ProverState::create(&poly),
+    );
 
     // verify proof
     let mut transcript = Transcript::new(b"sumchecktest");
     let subclaim = proof
-        .verify_without_evaluation(&mut transcript, poly_info, &asserted_sum)
+        .verify_without_evaluation(
+            &mut transcript,
+            poly.max_multiplicands,
+            poly.num_variables,
+            &asserted_sum,
+        )
         .expect("verify failed");
     assert_eq!(subclaim.evaluation_point, evaluation_point);
     assert_eq!(
@@ -172,17 +190,15 @@ fn we_can_verify_many_random_test_cases() {
         let proof = SumcheckProof::create(
             &mut transcript,
             &mut evaluation_point,
-            &test_case.polynomial,
+            ProverState::create(&test_case.polynomial),
         );
 
         let mut transcript = Transcript::new(b"sumchecktest");
         let subclaim = proof
             .verify_without_evaluation(
                 &mut transcript,
-                CompositePolynomialInfo {
-                    max_multiplicands: test_case.max_multiplicands,
-                    num_variables: test_case.num_vars,
-                },
+                test_case.max_multiplicands,
+                test_case.num_vars,
                 &test_case.sum,
             )
             .expect("verification should succeed with the correct setup");
@@ -200,10 +216,8 @@ fn we_can_verify_many_random_test_cases() {
         transcript.extend_serialize_as_le(&123u64);
         let verify_result = proof.verify_without_evaluation(
             &mut transcript,
-            CompositePolynomialInfo {
-                max_multiplicands: test_case.max_multiplicands,
-                num_variables: test_case.num_vars,
-            },
+            test_case.max_multiplicands,
+            test_case.num_vars,
             &test_case.sum,
         );
         if let Ok(subclaim) = verify_result {
@@ -218,10 +232,8 @@ fn we_can_verify_many_random_test_cases() {
             proof
                 .verify_without_evaluation(
                     &mut transcript,
-                    CompositePolynomialInfo {
-                        max_multiplicands: test_case.max_multiplicands,
-                        num_variables: test_case.num_vars,
-                    },
+                    test_case.max_multiplicands,
+                    test_case.num_vars,
                     &(test_case.sum + TestScalar::ONE),
                 )
                 .is_err(),
@@ -235,10 +247,8 @@ fn we_can_verify_many_random_test_cases() {
             modified_proof
                 .verify_without_evaluation(
                     &mut transcript,
-                    CompositePolynomialInfo {
-                        max_multiplicands: test_case.max_multiplicands,
-                        num_variables: test_case.num_vars,
-                    },
+                    test_case.max_multiplicands,
+                    test_case.num_vars,
                     &test_case.sum,
                 )
                 .is_err(),

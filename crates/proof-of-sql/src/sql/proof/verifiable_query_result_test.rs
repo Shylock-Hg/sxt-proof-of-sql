@@ -15,7 +15,7 @@ use crate::{
         proof::ProofError,
         scalar::Scalar,
     },
-    sql::proof::{FirstRoundBuilder, ProvableQueryResult, QueryData},
+    sql::proof::{FirstRoundBuilder, QueryData},
 };
 use bumpalo::Bump;
 use serde::Serialize;
@@ -26,21 +26,20 @@ pub(super) struct EmptyTestQueryExpr {
     pub(super) columns: usize,
 }
 impl ProverEvaluate for EmptyTestQueryExpr {
-    fn result_evaluate<'a, S: Scalar>(
+    fn first_round_evaluate<'a, S: Scalar>(
         &self,
+        builder: &mut FirstRoundBuilder,
         alloc: &'a Bump,
         _table_map: &IndexMap<TableRef, Table<'a, S>>,
-    ) -> (Table<'a, S>, Vec<usize>) {
+    ) -> Table<'a, S> {
         let zeros = vec![0_i64; self.length];
-        (
-            table_with_row_count(
-                (1..=self.columns).map(|i| borrowed_bigint(format!("a{i}"), zeros.clone(), alloc)),
-                self.length,
-            ),
-            vec![self.length],
+        builder.produce_one_evaluation_length(self.length);
+        table_with_row_count(
+            (1..=self.columns).map(|i| borrowed_bigint(format!("a{i}"), zeros.clone(), alloc)),
+            self.length,
         )
     }
-    fn first_round_evaluate(&self, _builder: &mut FirstRoundBuilder) {}
+
     fn final_round_evaluate<'a, S: Scalar>(
         &self,
         builder: &mut FinalRoundBuilder<'a, S>,
@@ -131,7 +130,7 @@ fn empty_verification_fails_if_the_result_contains_non_null_members() {
         (),
     );
     let res = VerifiableQueryResult::<InnerProductProof> {
-        provable_result: Some(ProvableQueryResult::default()),
+        result: Some(owned_table([])),
         proof: None,
     };
     assert!(res.verify(&expr, &accessor, &()).is_err());
