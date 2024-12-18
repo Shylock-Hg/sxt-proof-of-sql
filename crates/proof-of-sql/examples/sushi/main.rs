@@ -10,7 +10,7 @@ use proof_of_sql::{
     proof_primitive::dory::{
         DynamicDoryEvaluationProof, ProverSetup, PublicParameters, VerifierSetup,
     },
-    sql::{parse::QueryExpr, proof::QueryProof},
+    sql::{parse::QueryExpr, proof::VerifiableQueryResult},
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::{fs::File, time::Instant};
@@ -29,13 +29,12 @@ fn prove_and_verify_query(
     // Parse the query:
     println!("Parsing the query: {sql}...");
     let now = Instant::now();
-    let query_plan =
-        QueryExpr::try_new(sql.parse().unwrap(), "sushi".parse().unwrap(), accessor).unwrap();
+    let query_plan = QueryExpr::try_new(sql.parse().unwrap(), "sushi".into(), accessor).unwrap();
     println!("Done in {} ms.", now.elapsed().as_secs_f64() * 1000.);
     // Generate the proof and result:
     print!("Generating proof...");
     let now = Instant::now();
-    let (proof, provable_result) = QueryProof::<DynamicDoryEvaluationProof>::new(
+    let verifiable_result = VerifiableQueryResult::<DynamicDoryEvaluationProof>::new(
         query_plan.proof_expr(),
         accessor,
         &prover_setup,
@@ -44,13 +43,8 @@ fn prove_and_verify_query(
     // Verify the result with the proof:
     print!("Verifying proof...");
     let now = Instant::now();
-    let result = proof
-        .verify(
-            query_plan.proof_expr(),
-            accessor,
-            &provable_result,
-            &verifier_setup,
-        )
+    let result = verifiable_result
+        .verify(query_plan.proof_expr(), accessor, &verifier_setup)
         .unwrap();
     println!("Verified in {} ms.", now.elapsed().as_secs_f64() * 1000.);
     // Display the result
@@ -93,42 +87,42 @@ fn main() {
     );
 
     prove_and_verify_query(
-        "SELECT COUNT(*) FROM fish WHERE nameEn = 'Tuna'",
+        "SELECT COUNT(*) FROM fish WHERE name_En = 'Tuna'",
         &accessor,
         &prover_setup,
         &verifier_setup,
     );
 
     prove_and_verify_query(
-        "SELECT kindEn FROM fish WHERE kindJa = 'Otoro'",
+        "SELECT kind_En FROM fish WHERE kind_Ja = 'Otoro'",
         &accessor,
         &prover_setup,
         &verifier_setup,
     );
 
     prove_and_verify_query(
-        "SELECT kindEn FROM fish WHERE kindJa = 'Otoro'",
+        "SELECT kind_En FROM fish WHERE kind_Ja = 'Otoro'",
         &accessor,
         &prover_setup,
         &verifier_setup,
     );
 
     prove_and_verify_query(
-        "SELECT * FROM fish WHERE pricePerPound > 25 AND pricePerPound < 75",
+        "SELECT * FROM fish WHERE price_Per_Pound > 25 AND price_Per_Pound < 75",
         &accessor,
         &prover_setup,
         &verifier_setup,
     );
 
     prove_and_verify_query(
-        "SELECT kindJa, COUNT(*) FROM fish GROUP BY kindJa",
+        "SELECT kind_Ja, COUNT(*) FROM fish GROUP BY kind_Ja",
         &accessor,
         &prover_setup,
         &verifier_setup,
     );
 
     prove_and_verify_query(
-        "SELECT kindJa, pricePerPound FROM fish WHERE nameEn = 'Tuna' ORDER BY pricePerPound ASC",
+        "SELECT kind_Ja, price_Per_Pound FROM fish WHERE name_En = 'Tuna' ORDER BY price_Per_Pound ASC",
         &accessor,
         &prover_setup,
         &verifier_setup,

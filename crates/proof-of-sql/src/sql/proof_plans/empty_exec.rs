@@ -8,17 +8,17 @@ use crate::{
         scalar::Scalar,
     },
     sql::proof::{
-        CountBuilder, FinalRoundBuilder, FirstRoundBuilder, ProofPlan, ProverEvaluate,
-        VerificationBuilder,
+        FinalRoundBuilder, FirstRoundBuilder, ProofPlan, ProverEvaluate, VerificationBuilder,
     },
+    utils::log,
 };
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 use bumpalo::Bump;
 use serde::{Deserialize, Serialize};
 
 /// Source [`ProofPlan`] for (sub)queries without table source such as `SELECT "No table here" as msg;`
 /// Inspired by [`DataFusion EmptyExec`](https://docs.rs/datafusion/latest/datafusion/physical_plan/empty/struct.EmptyExec.html)
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct EmptyExec {}
 
 impl Default for EmptyExec {
@@ -36,10 +36,6 @@ impl EmptyExec {
 }
 
 impl ProofPlan for EmptyExec {
-    fn count(&self, _builder: &mut CountBuilder) -> Result<(), ProofError> {
-        Ok(())
-    }
-
     #[allow(unused_variables)]
     fn verifier_evaluate<S: Scalar>(
         &self,
@@ -68,21 +64,24 @@ impl ProofPlan for EmptyExec {
 }
 
 impl ProverEvaluate for EmptyExec {
-    #[tracing::instrument(name = "EmptyExec::result_evaluate", level = "debug", skip_all)]
-    fn result_evaluate<'a, S: Scalar>(
+    #[tracing::instrument(name = "EmptyExec::first_round_evaluate", level = "debug", skip_all)]
+    fn first_round_evaluate<'a, S: Scalar>(
         &self,
+        _builder: &mut FirstRoundBuilder,
         _alloc: &'a Bump,
         _table_map: &IndexMap<TableRef, Table<'a, S>>,
-    ) -> (Table<'a, S>, Vec<usize>) {
-        // Create an empty table with one row
-        (
-            Table::<'a, S>::try_new_with_options(IndexMap::default(), TableOptions::new(Some(1)))
-                .unwrap(),
-            vec![],
-        )
-    }
+    ) -> Table<'a, S> {
+        log::log_memory_usage("Start");
 
-    fn first_round_evaluate(&self, _builder: &mut FirstRoundBuilder) {}
+        // Create an empty table with one row
+        let res =
+            Table::<'a, S>::try_new_with_options(IndexMap::default(), TableOptions::new(Some(1)))
+                .unwrap();
+
+        log::log_memory_usage("End");
+
+        res
+    }
 
     #[tracing::instrument(name = "EmptyExec::final_round_evaluate", level = "debug", skip_all)]
     #[allow(unused_variables)]
@@ -92,8 +91,15 @@ impl ProverEvaluate for EmptyExec {
         _alloc: &'a Bump,
         _table_map: &IndexMap<TableRef, Table<'a, S>>,
     ) -> Table<'a, S> {
+        log::log_memory_usage("Start");
+
         // Create an empty table with one row
-        Table::<'a, S>::try_new_with_options(IndexMap::default(), TableOptions::new(Some(1)))
-            .unwrap()
+        let res =
+            Table::<'a, S>::try_new_with_options(IndexMap::default(), TableOptions::new(Some(1)))
+                .unwrap();
+
+        log::log_memory_usage("End");
+
+        res
     }
 }

@@ -11,11 +11,9 @@ use core::{
     fmt::{Display, Formatter},
     mem::size_of,
 };
-use proof_of_sql_parser::{
-    posql_time::{PoSQLTimeUnit, PoSQLTimeZone},
-    Identifier,
-};
+use proof_of_sql_parser::posql_time::{PoSQLTimeUnit, PoSQLTimeZone};
 use serde::{Deserialize, Serialize};
+use sqlparser::ast::Ident;
 
 /// Represents a read-only view of a column in an in-memory,
 /// column-oriented database.
@@ -492,9 +490,9 @@ impl Display for ColumnType {
 }
 
 /// Reference of a SQL column
-#[derive(Debug, PartialEq, Eq, Clone, Hash, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
 pub struct ColumnRef {
-    column_id: Identifier,
+    column_id: Ident,
     table_ref: TableRef,
     column_type: ColumnType,
 }
@@ -502,7 +500,7 @@ pub struct ColumnRef {
 impl ColumnRef {
     /// Create a new `ColumnRef` from a table, column identifier and column type
     #[must_use]
-    pub fn new(table_ref: TableRef, column_id: Identifier, column_type: ColumnType) -> Self {
+    pub fn new(table_ref: TableRef, column_id: Ident, column_type: ColumnType) -> Self {
         Self {
             column_id,
             table_ref,
@@ -518,8 +516,8 @@ impl ColumnRef {
 
     /// Returns the column identifier of this column
     #[must_use]
-    pub fn column_id(&self) -> Identifier {
-        self.column_id
+    pub fn column_id(&self) -> Ident {
+        self.column_id.clone()
     }
 
     /// Returns the column type of this column
@@ -533,23 +531,23 @@ impl ColumnRef {
 /// of a column in a table. Namely: it's name and type.
 ///
 /// This is the analog of a `Field` in Apache Arrow.
-#[derive(Debug, PartialEq, Eq, Clone, Hash, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
 pub struct ColumnField {
-    name: Identifier,
+    name: Ident,
     data_type: ColumnType,
 }
 
 impl ColumnField {
     /// Create a new `ColumnField` from a name and a type
     #[must_use]
-    pub fn new(name: Identifier, data_type: ColumnType) -> ColumnField {
+    pub fn new(name: Ident, data_type: ColumnType) -> ColumnField {
         ColumnField { name, data_type }
     }
 
     /// Returns the name of the column
     #[must_use]
-    pub fn name(&self) -> Identifier {
-        self.name
+    pub fn name(&self) -> Ident {
+        self.name.clone()
     }
 
     /// Returns the type of the column
@@ -567,9 +565,9 @@ mod tests {
 
     #[test]
     fn column_type_serializes_to_string() {
-        let column_type = ColumnType::TimestampTZ(PoSQLTimeUnit::Second, PoSQLTimeZone::Utc);
+        let column_type = ColumnType::TimestampTZ(PoSQLTimeUnit::Second, PoSQLTimeZone::utc());
         let serialized = serde_json::to_string(&column_type).unwrap();
-        assert_eq!(serialized, r#"{"TimestampTZ":["Second","Utc"]}"#);
+        assert_eq!(serialized, r#"{"TimestampTZ":["Second",{"offset":0}]}"#);
 
         let column_type = ColumnType::Boolean;
         let serialized = serde_json::to_string(&column_type).unwrap();
@@ -611,9 +609,9 @@ mod tests {
     #[test]
     fn we_can_deserialize_columns_from_valid_strings() {
         let expected_column_type =
-            ColumnType::TimestampTZ(PoSQLTimeUnit::Second, PoSQLTimeZone::Utc);
+            ColumnType::TimestampTZ(PoSQLTimeUnit::Second, PoSQLTimeZone::utc());
         let deserialized: ColumnType =
-            serde_json::from_str(r#"{"TimestampTZ":["Second","Utc"]}"#).unwrap();
+            serde_json::from_str(r#"{"TimestampTZ":["Second",{"offset":0}]}"#).unwrap();
         assert_eq!(deserialized, expected_column_type);
 
         let expected_column_type = ColumnType::Boolean;
@@ -1066,7 +1064,7 @@ mod tests {
         assert_eq!(column.column_type().bit_size(), 256);
 
         let column: Column<'_, DoryScalar> =
-            Column::TimestampTZ(PoSQLTimeUnit::Second, PoSQLTimeZone::Utc, &[1, 2, 3]);
+            Column::TimestampTZ(PoSQLTimeUnit::Second, PoSQLTimeZone::utc(), &[1, 2, 3]);
         assert_eq!(column.column_type().byte_size(), 8);
         assert_eq!(column.column_type().bit_size(), 64);
     }

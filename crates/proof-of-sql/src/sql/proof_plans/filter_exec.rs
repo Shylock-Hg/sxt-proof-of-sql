@@ -12,15 +12,16 @@ use crate::{
     },
     sql::{
         proof::{
-            CountBuilder, FinalRoundBuilder, FirstRoundBuilder, HonestProver, ProofPlan,
-            ProverEvaluate, ProverHonestyMarker, SumcheckSubpolynomialType, VerificationBuilder,
+            FinalRoundBuilder, FirstRoundBuilder, HonestProver, ProofPlan, ProverEvaluate,
+            ProverHonestyMarker, SumcheckSubpolynomialType, VerificationBuilder,
         },
         proof_exprs::{AliasedDynProofExpr, DynProofExpr, ProofExpr, TableExpr},
     },
+    utils::log,
 };
 use alloc::{boxed::Box, vec, vec::Vec};
 use bumpalo::Bump;
-use core::{iter::repeat_with, marker::PhantomData};
+use core::marker::PhantomData;
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
 
@@ -30,10 +31,10 @@ use serde::{Deserialize, Serialize};
 /// ```
 ///
 /// This differs from the [`FilterExec`] in that the result is not a sparse table.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct OstensibleFilterExec<H: ProverHonestyMarker> {
-    pub(super) aliased_results: Vec<AliasedDynProofExpr>,
-    pub(super) table: TableExpr,
+    pub(crate) aliased_results: Vec<AliasedDynProofExpr>,
+    pub(crate) table: TableExpr,
     /// TODO: add docs
     pub(crate) where_clause: DynProofExpr,
     phantom: PhantomData<H>,
@@ -59,19 +60,6 @@ impl<H: ProverHonestyMarker> ProofPlan for OstensibleFilterExec<H>
 where
     OstensibleFilterExec<H>: ProverEvaluate,
 {
-    fn count(&self, builder: &mut CountBuilder) -> Result<(), ProofError> {
-        self.where_clause.count(builder)?;
-        for aliased_expr in &self.aliased_results {
-            aliased_expr.expr.count(builder)?;
-            builder.count_intermediate_mles(1);
-        }
-        builder.count_intermediate_mles(2);
-        builder.count_subpolynomials(3);
-        builder.count_degree(3);
-        builder.count_post_result_challenges(2);
-        Ok(())
-    }
-
     #[allow(unused_variables)]
     fn verifier_evaluate<S: Scalar>(
         &self,
@@ -99,15 +87,14 @@ where
                 .collect::<Result<Vec<_>, _>>()?,
         );
         // 3. filtered_columns
-        let filtered_columns_evals: Vec<_> = repeat_with(|| builder.consume_intermediate_mle())
-            .take(self.aliased_results.len())
-            .collect();
+        let filtered_columns_evals =
+            builder.try_consume_mle_evaluations(self.aliased_results.len())?;
         assert!(filtered_columns_evals.len() == self.aliased_results.len());
 
-        let alpha = builder.consume_post_result_challenge();
-        let beta = builder.consume_post_result_challenge();
+        let alpha = builder.try_consume_post_result_challenge()?;
+        let beta = builder.try_consume_post_result_challenge()?;
 
-        let output_one_eval = builder.consume_one_evaluation();
+        let output_one_eval = builder.try_consume_one_evaluation()?;
 
         verify_filter(
             builder,
@@ -128,7 +115,9 @@ where
     fn get_column_result_fields(&self) -> Vec<ColumnField> {
         self.aliased_results
             .iter()
-            .map(|aliased_expr| ColumnField::new(aliased_expr.alias, aliased_expr.expr.data_type()))
+            .map(|aliased_expr| {
+                ColumnField::new(aliased_expr.alias.clone(), aliased_expr.expr.data_type())
+            })
             .collect()
     }
 
@@ -153,12 +142,15 @@ where
 pub type FilterExec = OstensibleFilterExec<HonestProver>;
 
 impl ProverEvaluate for FilterExec {
-    #[tracing::instrument(name = "FilterExec::result_evaluate", level = "debug", skip_all)]
-    fn result_evaluate<'a, S: Scalar>(
+    #[tracing::instrument(name = "FilterExec::first_round_evaluate", level = "debug", skip_all)]
+    fn first_round_evaluate<'a, S: Scalar>(
         &self,
+        builder: &mut FirstRoundBuilder,
         alloc: &'a Bump,
         table_map: &IndexMap<TableRef, Table<'a, S>>,
-    ) -> (Table<'a, S>, Vec<usize>) {
+    ) -> Table<'a, S> {
+        log::log_memory_usage("Start");
+
         let table = table_map
             .get(&self.table.table_ref)
             .expect("Table not found");
@@ -181,16 +173,17 @@ impl ProverEvaluate for FilterExec {
         let res = Table::<'a, S>::try_from_iter_with_options(
             self.aliased_results
                 .iter()
-                .map(|expr| expr.alias)
+                .map(|expr| expr.alias.clone())
                 .zip(filtered_columns),
             TableOptions::new(Some(output_length)),
         )
         .expect("Failed to create table from iterator");
-        (res, vec![output_length])
-    }
-
-    fn first_round_evaluate(&self, builder: &mut FirstRoundBuilder) {
         builder.request_post_result_challenges(2);
+        builder.produce_one_evaluation_length(output_length);
+
+        log::log_memory_usage("End");
+
+        res
     }
 
     #[tracing::instrument(name = "FilterExec::final_round_evaluate", level = "debug", skip_all)]
@@ -201,6 +194,8 @@ impl ProverEvaluate for FilterExec {
         alloc: &'a Bump,
         table_map: &IndexMap<TableRef, Table<'a, S>>,
     ) -> Table<'a, S> {
+        log::log_memory_usage("Start");
+
         let table = table_map
             .get(&self.table.table_ref)
             .expect("Table not found");
@@ -239,19 +234,23 @@ impl ProverEvaluate for FilterExec {
             table.num_rows(),
             result_len,
         );
-        Table::<'a, S>::try_from_iter_with_options(
+        let res = Table::<'a, S>::try_from_iter_with_options(
             self.aliased_results
                 .iter()
-                .map(|expr| expr.alias)
+                .map(|expr| expr.alias.clone())
                 .zip(filtered_columns),
             TableOptions::new(Some(output_length)),
         )
-        .expect("Failed to create table from iterator")
+        .expect("Failed to create table from iterator");
+
+        log::log_memory_usage("End");
+
+        res
     }
 }
 
 #[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
-fn verify_filter<S: Scalar>(
+pub(super) fn verify_filter<S: Scalar>(
     builder: &mut VerificationBuilder<S>,
     alpha: S,
     beta: S,
@@ -261,28 +260,31 @@ fn verify_filter<S: Scalar>(
     s_eval: S,
     d_evals: &[S],
 ) -> Result<(), ProofError> {
-    let c_fold_eval = alpha * one_eval + fold_vals(beta, c_evals);
-    let d_bar_fold_eval = alpha * one_eval + fold_vals(beta, d_evals);
-    let c_star_eval = builder.consume_intermediate_mle();
-    let d_star_eval = builder.consume_intermediate_mle();
+    let c_fold_eval = alpha * fold_vals(beta, c_evals);
+    let d_fold_eval = alpha * fold_vals(beta, d_evals);
+    let c_star_eval = builder.try_consume_mle_evaluation()?;
+    let d_star_eval = builder.try_consume_mle_evaluation()?;
 
     // sum c_star * s - d_star = 0
-    builder.produce_sumcheck_subpolynomial_evaluation(
-        &SumcheckSubpolynomialType::ZeroSum,
+    builder.try_produce_sumcheck_subpolynomial_evaluation(
+        SumcheckSubpolynomialType::ZeroSum,
         c_star_eval * s_eval - d_star_eval,
-    );
+        2,
+    )?;
 
-    // c_fold * c_star - 1 = 0
-    builder.produce_sumcheck_subpolynomial_evaluation(
-        &SumcheckSubpolynomialType::Identity,
-        c_fold_eval * c_star_eval - one_eval,
-    );
+    // c_star + c_fold * c_star - input_ones = 0
+    builder.try_produce_sumcheck_subpolynomial_evaluation(
+        SumcheckSubpolynomialType::Identity,
+        c_star_eval + c_fold_eval * c_star_eval - one_eval,
+        2,
+    )?;
 
-    // d_bar_fold * d_star - chi = 0
-    builder.produce_sumcheck_subpolynomial_evaluation(
-        &SumcheckSubpolynomialType::Identity,
-        d_bar_fold_eval * d_star_eval - chi_eval,
-    );
+    // d_star + d_fold * d_star - chi = 0
+    builder.try_produce_sumcheck_subpolynomial_evaluation(
+        SumcheckSubpolynomialType::Identity,
+        d_star_eval + d_fold_eval * d_star_eval - chi_eval,
+        2,
+    )?;
 
     Ok(())
 }
@@ -299,19 +301,21 @@ pub(super) fn prove_filter<'a, S: Scalar + 'a>(
     n: usize,
     m: usize,
 ) {
-    let chi = alloc.alloc_slice_fill_copy(n, false);
-    chi[..m].fill(true);
+    let input_ones = alloc.alloc_slice_fill_copy(n, true);
+    let chi = alloc.alloc_slice_fill_copy(m, true);
 
-    let c_fold = alloc.alloc_slice_fill_copy(n, alpha);
-    fold_columns(c_fold, One::one(), beta, c);
-    let d_bar_fold = alloc.alloc_slice_fill_copy(n, alpha);
-    fold_columns(d_bar_fold, One::one(), beta, d);
+    let c_fold = alloc.alloc_slice_fill_copy(n, Zero::zero());
+    fold_columns(c_fold, alpha, beta, c);
+    let d_fold = alloc.alloc_slice_fill_copy(m, Zero::zero());
+    fold_columns(d_fold, alpha, beta, d);
 
     let c_star = alloc.alloc_slice_copy(c_fold);
-    let d_star = alloc.alloc_slice_copy(d_bar_fold);
-    d_star[m..].fill(Zero::zero());
+    slice_ops::add_const::<S, S>(c_star, One::one());
     slice_ops::batch_inversion(c_star);
-    slice_ops::batch_inversion(&mut d_star[..m]);
+
+    let d_star = alloc.alloc_slice_copy(d_fold);
+    slice_ops::add_const::<S, S>(d_star, One::one());
+    slice_ops::batch_inversion(d_star);
 
     builder.produce_intermediate_mle(c_star as &[_]);
     builder.produce_intermediate_mle(d_star as &[_]);
@@ -325,25 +329,27 @@ pub(super) fn prove_filter<'a, S: Scalar + 'a>(
         ],
     );
 
-    // c_fold * c_star - 1 = 0
+    // c_star + c_fold * c_star - input_ones = 0
     builder.produce_sumcheck_subpolynomial(
         SumcheckSubpolynomialType::Identity,
         vec![
+            (S::one(), vec![Box::new(c_star as &[_])]),
             (
                 S::one(),
                 vec![Box::new(c_star as &[_]), Box::new(c_fold as &[_])],
             ),
-            (-S::one(), vec![]),
+            (-S::one(), vec![Box::new(input_ones as &[_])]),
         ],
     );
 
-    // d_bar_fold * d_star - chi = 0
+    // d_star + d_fold * d_star - chi = 0
     builder.produce_sumcheck_subpolynomial(
         SumcheckSubpolynomialType::Identity,
         vec![
+            (S::one(), vec![Box::new(d_star as &[_])]),
             (
                 S::one(),
-                vec![Box::new(d_star as &[_]), Box::new(d_bar_fold as &[_])],
+                vec![Box::new(d_star as &[_]), Box::new(d_fold as &[_])],
             ),
             (-S::one(), vec![Box::new(chi as &[_])]),
         ],

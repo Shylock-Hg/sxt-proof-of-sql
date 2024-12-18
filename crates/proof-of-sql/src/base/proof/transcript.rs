@@ -13,6 +13,15 @@ pub trait Transcript {
     fn new() -> Self;
     /// Appends the provided messages by appending the reversed raw bytes (i.e. assuming the message is bigendian)
     fn extend_as_be<M: FromBytes + AsBytes>(&mut self, messages: impl IntoIterator<Item = M>);
+    /// Appends the provided messages by appending the reversed raw bytes (i.e. assuming the message is bigendian)
+    fn extend_as_be_from_refs<'a, M: FromBytes + AsBytes + 'a + Copy>(
+        &mut self,
+        messages: impl IntoIterator<Item = &'a M>,
+    ) {
+        self.extend_as_be(messages.into_iter().copied());
+    }
+    /// Appends the provided messages by appending the raw bytes (i.e. assuming the message is littleendian)
+    fn extend_as_le<M: AsBytes>(&mut self, messages: impl IntoIterator<Item = M>);
     /// Appends the provided messages by appending the raw bytes (i.e. assuming the message is littleendian)
     fn extend_as_le_from_refs<'a, M: AsBytes + 'a + ?Sized>(
         &mut self,
@@ -51,9 +60,9 @@ pub trait Transcript {
     /// This allows for interopability between transcript types.
     fn wrap_transcript<T: Transcript, R>(&mut self, op: impl FnOnce(&mut T) -> R) -> R {
         let mut transcript = T::new();
-        transcript.extend_as_le_from_refs([&self.challenge_as_le()]);
+        transcript.extend_as_le([self.challenge_as_le()]);
         let result = op(&mut transcript);
-        self.extend_as_le_from_refs([&transcript.challenge_as_le()]);
+        self.extend_as_le([transcript.challenge_as_le()]);
         result
     }
 }
@@ -126,6 +135,23 @@ mod tests {
             transcript.challenge_bytes(b"test3", &mut result);
             result
         });
+
+        assert_ne!(transcript1.challenge_as_le(), transcript2.challenge_as_le());
+    }
+
+    #[test]
+    fn we_can_extend_transcript_with_extend_as_be_from_refs() {
+        let mut transcript1: Keccak256Transcript = Transcript::new();
+        let mut transcript2: Keccak256Transcript = Transcript::new();
+
+        let messages: Vec<u32> = vec![1, 2, 3, 4];
+        transcript1.extend_as_be_from_refs(&messages);
+        transcript2.extend_as_be_from_refs(&messages);
+
+        assert_eq!(transcript1.challenge_as_le(), transcript2.challenge_as_le());
+
+        let more_messages: Vec<u32> = vec![5, 6, 7, 8];
+        transcript2.extend_as_be_from_refs(&more_messages);
 
         assert_ne!(transcript1.challenge_as_le(), transcript2.challenge_as_le());
     }
