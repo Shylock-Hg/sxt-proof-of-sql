@@ -1,4 +1,4 @@
-use super::{EmptyExec, FilterExec, GroupByExec, ProjectionExec, TableExec};
+use super::{EmptyExec, FilterExec, GroupByExec, ProjectionExec, SliceExec, TableExec, UnionExec};
 use crate::{
     base::{
         database::{ColumnField, ColumnRef, OwnedTable, Table, TableEvaluation, TableRef},
@@ -7,8 +7,7 @@ use crate::{
         scalar::Scalar,
     },
     sql::proof::{
-        CountBuilder, FinalRoundBuilder, FirstRoundBuilder, ProofPlan, ProverEvaluate,
-        VerificationBuilder,
+        FinalRoundBuilder, FirstRoundBuilder, ProofPlan, ProverEvaluate, VerificationBuilder,
     },
 };
 use alloc::vec::Vec;
@@ -16,7 +15,7 @@ use bumpalo::Bump;
 use serde::{Deserialize, Serialize};
 
 /// The query plan for proving a query
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 #[enum_dispatch::enum_dispatch]
 pub enum DynProofPlan {
     /// Source [`ProofPlan`] for (sub)queries without table source such as `SELECT "No table here" as msg;`
@@ -43,4 +42,19 @@ pub enum DynProofPlan {
     ///     SELECT <result_expr1>, ..., <result_exprN> FROM <table> WHERE <where_clause>
     /// ```
     Filter(FilterExec),
+    /// `ProofPlan` for queries of the form
+    /// ```ignore
+    ///     <ProofPlan> LIMIT <fetch> [OFFSET <skip>]
+    /// ```
+    Slice(SliceExec),
+    /// `ProofPlan` for queries of the form
+    /// ```ignore
+    ///     <ProofPlan>
+    ///     UNION ALL
+    ///     <ProofPlan>
+    ///     ...
+    ///     UNION ALL
+    ///     <ProofPlan>
+    /// ```
+    Union(UnionExec),
 }

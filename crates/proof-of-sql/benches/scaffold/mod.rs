@@ -33,8 +33,7 @@ fn scaffold<'a, CP: CommitmentEvaluationProof>(
         &generate_random_columns(alloc, rng, columns, size),
         prover_setup,
     );
-    let query =
-        QueryExpr::try_new(query.parse().unwrap(), "bench".parse().unwrap(), accessor).unwrap();
+    let query = QueryExpr::try_new(query.parse().unwrap(), "bench".into(), accessor).unwrap();
     let result = VerifiableQueryResult::new(query.proof_expr(), accessor, prover_setup);
     (query, result)
 }
@@ -74,7 +73,7 @@ pub fn jaeger_scaffold<CP: CommitmentEvaluationProof>(
 }
 
 #[allow(dead_code, clippy::module_name_repetitions)]
-pub fn criterion_scaffold<CP: CommitmentEvaluationProof>(
+pub fn criterion_scaffold<CP: CommitmentEvaluationProof + Clone>(
     c: &mut Criterion,
     title: &str,
     query: &str,
@@ -107,7 +106,11 @@ pub fn criterion_scaffold<CP: CommitmentEvaluationProof>(
             });
         });
         group.bench_function("Verify Proof", |b| {
-            b.iter(|| result.verify(query.proof_expr(), &accessor, verifier_setup));
+            b.iter(|| {
+                result
+                    .clone()
+                    .verify(query.proof_expr(), &accessor, verifier_setup)
+            });
         });
     }
 }

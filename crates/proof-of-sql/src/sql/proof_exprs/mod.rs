@@ -20,14 +20,6 @@ use multiply_expr::MultiplyExpr;
 #[cfg(all(test, feature = "blitzar"))]
 mod multiply_expr_test;
 
-mod bitwise_verification;
-use bitwise_verification::{
-    is_within_acceptable_range, verify_constant_abs_decomposition,
-    verify_constant_sign_decomposition,
-};
-#[cfg(test)]
-mod bitwise_verification_test;
-
 mod dyn_proof_expr;
 pub(crate) use dyn_proof_expr::DynProofExpr;
 
@@ -37,7 +29,7 @@ pub(crate) use literal_expr::LiteralExpr;
 mod literal_expr_test;
 
 mod and_expr;
-use and_expr::AndExpr;
+pub(crate) use and_expr::AndExpr;
 #[cfg(all(test, feature = "blitzar"))]
 mod and_expr_test;
 
@@ -47,7 +39,7 @@ use inequality_expr::InequalityExpr;
 mod inequality_expr_test;
 
 mod or_expr;
-use or_expr::{count_or, prover_evaluate_or, result_evaluate_or, verifier_evaluate_or, OrExpr};
+use or_expr::{prover_evaluate_or, result_evaluate_or, verifier_evaluate_or, OrExpr};
 #[cfg(all(test, feature = "blitzar"))]
 mod or_expr_test;
 
@@ -65,17 +57,12 @@ pub(crate) use numerical_util::{
 };
 
 mod equals_expr;
+pub(crate) use equals_expr::EqualsExpr;
 use equals_expr::{
-    count_equals_zero, prover_evaluate_equals_zero, result_evaluate_equals_zero,
-    verifier_evaluate_equals_zero, EqualsExpr,
+    prover_evaluate_equals_zero, result_evaluate_equals_zero, verifier_evaluate_equals_zero,
 };
 #[cfg(all(test, feature = "blitzar"))]
 mod equals_expr_test;
-
-mod sign_expr;
-use sign_expr::{count_sign, prover_evaluate_sign, result_evaluate_sign, verifier_evaluate_sign};
-#[cfg(all(test, feature = "blitzar"))]
-mod sign_expr_test;
 
 mod table_expr;
 pub(crate) use table_expr::TableExpr;
@@ -87,6 +74,3 @@ mod column_expr;
 pub(crate) use column_expr::ColumnExpr;
 #[cfg(all(test, feature = "blitzar"))]
 mod column_expr_test;
-
-#[allow(dead_code, unused_variables)]
-mod range_check;

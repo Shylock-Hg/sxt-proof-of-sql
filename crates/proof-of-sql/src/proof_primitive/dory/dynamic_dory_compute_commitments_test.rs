@@ -9,6 +9,15 @@ use num_traits::Zero;
 use proof_of_sql_parser::posql_time::{PoSQLTimeUnit, PoSQLTimeZone};
 
 #[test]
+fn we_can_handle_calling_with_an_empty_committable_column() {
+    let public_parameters = PublicParameters::test_rand(5, &mut test_rng());
+    let setup = ProverSetup::from(&public_parameters);
+    let res = compute_dynamic_dory_commitments(&[], 0, &setup);
+
+    assert!(res.is_empty());
+}
+
+#[test]
 fn we_can_compute_a_dynamic_dory_commitment_with_unsigned_bigint_values() {
     let public_parameters = PublicParameters::test_rand(5, &mut test_rng());
     let setup = ProverSetup::from(&public_parameters);
@@ -238,7 +247,7 @@ fn we_can_compute_a_dynamic_dory_commitment_with_mixed_committable_columns() {
             CommittableColumn::VarChar(vec![[16, 0, 0, 0]]),
             CommittableColumn::TimestampTZ(
                 PoSQLTimeUnit::Second,
-                PoSQLTimeZone::Utc,
+                PoSQLTimeZone::utc(),
                 &[17, 18, 19, 20],
             ),
         ],
@@ -313,7 +322,7 @@ fn we_can_compute_a_dynamic_dory_commitment_with_mixed_committable_columns_with_
             CommittableColumn::VarChar(vec![[16, 0, 0, 0]]),
             CommittableColumn::TimestampTZ(
                 PoSQLTimeUnit::Second,
-                PoSQLTimeZone::Utc,
+                PoSQLTimeZone::utc(),
                 &[17, 18, 19, 20],
             ),
         ],
@@ -388,7 +397,7 @@ fn we_can_compute_a_dynamic_dory_commitment_with_mixed_committable_columns_with_
             CommittableColumn::VarChar(vec![[16, 0, 0, 0]]),
             CommittableColumn::TimestampTZ(
                 PoSQLTimeUnit::Second,
-                PoSQLTimeZone::Utc,
+                PoSQLTimeZone::utc(),
                 &[-18, -17, 17, 18],
             ),
         ],
@@ -476,7 +485,7 @@ fn we_can_compute_a_dynamic_dory_commitment_with_mixed_committable_columns_with_
             CommittableColumn::VarChar(vec![[16, 0, 0, 0]]),
             CommittableColumn::TimestampTZ(
                 PoSQLTimeUnit::Second,
-                PoSQLTimeZone::Utc,
+                PoSQLTimeZone::utc(),
                 &[-18, -17, 17, 18],
             ),
         ],

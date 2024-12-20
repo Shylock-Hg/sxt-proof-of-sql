@@ -6,18 +6,18 @@ use crate::{
         scalar::Scalar,
     },
     sql::proof::{
-        CountBuilder, FinalRoundBuilder, FirstRoundBuilder, ProofPlan, ProverEvaluate,
-        VerificationBuilder,
+        FinalRoundBuilder, FirstRoundBuilder, ProofPlan, ProverEvaluate, VerificationBuilder,
     },
+    utils::log,
 };
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 use bumpalo::Bump;
 use serde::{Deserialize, Serialize};
 
 /// Source [`ProofPlan`] for (sub)queries with table source such as `SELECT col from tab;`
 /// Inspired by `DataFusion` data source [`ExecutionPlan`]s such as [`ArrowExec`] and [`CsvExec`].
 /// Note that we only need to load the columns we use.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct TableExec {
     /// Table reference
     pub table_ref: TableRef,
@@ -34,10 +34,6 @@ impl TableExec {
 }
 
 impl ProofPlan for TableExec {
-    fn count(&self, _builder: &mut CountBuilder) -> Result<(), ProofError> {
-        Ok(())
-    }
-
     #[allow(unused_variables)]
     fn verifier_evaluate<S: Scalar>(
         &self,
@@ -77,22 +73,24 @@ impl ProofPlan for TableExec {
 }
 
 impl ProverEvaluate for TableExec {
-    #[tracing::instrument(name = "TableExec::result_evaluate", level = "debug", skip_all)]
-    fn result_evaluate<'a, S: Scalar>(
+    #[tracing::instrument(name = "TableExec::first_round_evaluate", level = "debug", skip_all)]
+    fn first_round_evaluate<'a, S: Scalar>(
         &self,
+        _builder: &mut FirstRoundBuilder<'a, S>,
         _alloc: &'a Bump,
         table_map: &IndexMap<TableRef, Table<'a, S>>,
-    ) -> (Table<'a, S>, Vec<usize>) {
-        (
-            table_map
-                .get(&self.table_ref)
-                .expect("Table not found")
-                .clone(),
-            vec![],
-        )
-    }
+    ) -> Table<'a, S> {
+        log::log_memory_usage("Start");
 
-    fn first_round_evaluate(&self, _builder: &mut FirstRoundBuilder) {}
+        let first_round_table = table_map
+            .get(&self.table_ref)
+            .expect("Table not found")
+            .clone();
+
+        log::log_memory_usage("End");
+
+        first_round_table
+    }
 
     #[tracing::instrument(name = "TableExec::final_round_evaluate", level = "debug", skip_all)]
     #[allow(unused_variables)]
@@ -102,9 +100,15 @@ impl ProverEvaluate for TableExec {
         alloc: &'a Bump,
         table_map: &IndexMap<TableRef, Table<'a, S>>,
     ) -> Table<'a, S> {
-        table_map
+        log::log_memory_usage("Start");
+
+        let final_round_table = table_map
             .get(&self.table_ref)
             .expect("Table not found")
-            .clone()
+            .clone();
+
+        log::log_memory_usage("End");
+
+        final_round_table
     }
 }

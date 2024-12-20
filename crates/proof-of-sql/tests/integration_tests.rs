@@ -15,7 +15,7 @@ use proof_of_sql::{
     sql::{
         parse::{ConversionError, QueryExpr},
         postprocessing::apply_postprocessing_steps,
-        proof::{QueryError, QueryProof},
+        proof::{QueryError, VerifiableQueryResult},
     },
 };
 
@@ -30,14 +30,14 @@ fn we_can_prove_a_minimal_filter_query_with_curve25519() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table WHERE a;".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let expected_result = owned_table([boolean("a", [true])]);
@@ -61,19 +61,17 @@ fn we_can_prove_a_minimal_filter_query_with_dory() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table WHERE not a".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<DoryEvaluationProof>::new(query.proof_expr(), &accessor, &dory_prover_setup);
-    let owned_table_result = proof
-        .verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &dory_verifier_setup,
-        )
+    let verifiable_result = VerifiableQueryResult::<DoryEvaluationProof>::new(
+        query.proof_expr(),
+        &accessor,
+        &dory_prover_setup,
+    );
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &dory_verifier_setup)
         .unwrap()
         .table;
     let expected_result = owned_table([boolean("a", [false])]);
@@ -95,22 +93,17 @@ fn we_can_prove_a_minimal_filter_query_with_dynamic_dory() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table WHERE not a".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) = QueryProof::<DynamicDoryEvaluationProof>::new(
+    let verifiable_result = VerifiableQueryResult::<DynamicDoryEvaluationProof>::new(
         query.proof_expr(),
         &accessor,
         &&prover_setup,
     );
-    let owned_table_result = proof
-        .verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &&verifier_setup,
-        )
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &&verifier_setup)
         .unwrap()
         .table;
     let expected_result = owned_table([boolean("a", [false])]);
@@ -128,14 +121,14 @@ fn we_can_prove_a_basic_equality_query_with_curve25519() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table WHERE b = 1;".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let expected_result = owned_table([bigint("a", [1, 3]), bigint("b", [1, 1])]);
@@ -159,19 +152,17 @@ fn we_can_prove_a_basic_equality_query_with_dory() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table WHERE b = 1".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<DoryEvaluationProof>::new(query.proof_expr(), &accessor, &dory_prover_setup);
-    let owned_table_result = proof
-        .verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &dory_verifier_setup,
-        )
+    let verifiable_result = VerifiableQueryResult::<DoryEvaluationProof>::new(
+        query.proof_expr(),
+        &accessor,
+        &dory_prover_setup,
+    );
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &dory_verifier_setup)
         .unwrap()
         .table;
     let expected_result = owned_table([bigint("a", [1, 3]), bigint("b", [1, 1])]);
@@ -189,14 +180,14 @@ fn we_can_prove_a_basic_inequality_query_with_curve25519() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table WHERE b >= 1;".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let expected_result = owned_table([bigint("a", [1, 3]), bigint("b", [1, 2])]);
@@ -220,14 +211,14 @@ fn we_can_prove_a_basic_query_containing_extrema_with_curve25519() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let expected_result = owned_table([
@@ -263,19 +254,17 @@ fn we_can_prove_a_basic_query_containing_extrema_with_dory() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table;".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<DoryEvaluationProof>::new(query.proof_expr(), &accessor, &dory_prover_setup);
-    let owned_table_result = proof
-        .verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &dory_verifier_setup,
-        )
+    let verifiable_result = VerifiableQueryResult::<DoryEvaluationProof>::new(
+        query.proof_expr(),
+        &accessor,
+        &dory_prover_setup,
+    );
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &dory_verifier_setup)
         .unwrap()
         .table;
     let expected_result = owned_table([
@@ -299,14 +288,14 @@ fn we_can_prove_a_query_with_arithmetic_in_where_clause_with_curve25519() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table WHERE b >= a + 1".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let transformed_result: OwnedTable<Curve25519Scalar> =
@@ -331,19 +320,17 @@ fn we_can_prove_a_query_with_arithmetic_in_where_clause_with_dory() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table WHERE b > 1 - a;".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<DoryEvaluationProof>::new(query.proof_expr(), &accessor, &dory_prover_setup);
-    let owned_table_result = proof
-        .verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &dory_verifier_setup,
-        )
+    let verifiable_result = VerifiableQueryResult::<DoryEvaluationProof>::new(
+        query.proof_expr(),
+        &accessor,
+        &dory_prover_setup,
+    );
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &dory_verifier_setup)
         .unwrap()
         .table;
     let expected_result = owned_table([bigint("a", [3]), bigint("b", [2])]);
@@ -366,14 +353,14 @@ fn we_can_prove_a_basic_equality_with_out_of_order_results_with_curve25519() {
         "select primes, amount from public.test_table where primes = 'abcd';"
             .parse()
             .unwrap(),
-        "public".parse().unwrap(),
+        "public".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let transformed_result: OwnedTable<Curve25519Scalar> =
@@ -399,19 +386,17 @@ fn we_can_prove_a_basic_inequality_query_with_dory() {
     );
     let query = QueryExpr::try_new(
         "SELECT * FROM table WHERE b <= 0".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<DoryEvaluationProof>::new(query.proof_expr(), &accessor, &dory_prover_setup);
-    let owned_table_result = proof
-        .verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &dory_verifier_setup,
-        )
+    let verifiable_result = VerifiableQueryResult::<DoryEvaluationProof>::new(
+        query.proof_expr(),
+        &accessor,
+        &dory_prover_setup,
+    );
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &dory_verifier_setup)
         .unwrap()
         .table;
     let expected_result = owned_table([bigint("a", [2]), bigint("b", [0])]);
@@ -430,11 +415,7 @@ fn decimal_type_issues_should_cause_provable_ast_to_fail() {
     let large_decimal = format!("0.{}", "1".repeat(75));
     let query_string = format!("SELECT d0 + {large_decimal} as res FROM table;");
     assert!(matches!(
-        QueryExpr::try_new(
-            query_string.parse().unwrap(),
-            "sxt".parse().unwrap(),
-            &accessor,
-        ),
+        QueryExpr::try_new(query_string.parse().unwrap(), "sxt".into(), &accessor,),
         Err(ConversionError::DataTypeMismatch { .. })
     ));
 }
@@ -461,14 +442,14 @@ fn we_can_prove_a_complex_query_with_curve25519() {
         "SELECT a + (b * c) + 1 as t, 45.7 as g, (a = b) or f as h, d0 * d1 + 1.4 as dr FROM table WHERE (a >= b) = (c < d) and (e = 'e') = f;"
             .parse()
             .unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let expected_result = owned_table([
@@ -508,19 +489,17 @@ fn we_can_prove_a_complex_query_with_dory() {
         "SELECT 0.5 + a * b * c - d as res, 32 as g, (c >= d) and f as h, (a + 1) * (b + 1 + c + d + d0 - d1 + 0.5) as res2 FROM table WHERE (a < b) = (c <= d) and e <> 'f' and f and 100000 * d1 * d0 + a = 1.3"
             .parse()
             .unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<DoryEvaluationProof>::new(query.proof_expr(), &accessor, &dory_prover_setup);
-    let owned_table_result = proof
-        .verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &dory_verifier_setup,
-        )
+    let verifiable_result = VerifiableQueryResult::<DoryEvaluationProof>::new(
+        query.proof_expr(),
+        &accessor,
+        &dory_prover_setup,
+    );
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &dory_verifier_setup)
         .unwrap()
         .table;
     let expected_result = owned_table([
@@ -546,14 +525,14 @@ fn we_can_prove_a_minimal_group_by_query_with_curve25519() {
         "SELECT a, count(*) as c FROM table group by a"
             .parse()
             .unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result: OwnedTable<Curve25519Scalar> = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result: OwnedTable<Curve25519Scalar> = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let transformed_result: OwnedTable<Curve25519Scalar> =
@@ -580,14 +559,14 @@ fn we_can_prove_a_basic_group_by_query_with_curve25519() {
         "SELECT a, sum(2 * b + 1) as d, count(*) as e FROM table WHERE c >= 0 group by a"
             .parse()
             .unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let expected_result = owned_table([
@@ -643,14 +622,14 @@ fn we_can_prove_a_cat_group_by_query_with_curve25519() {
         "select human, sum(age + 0.1) as total_adjusted_cat_age, count(*) as num_cats from sxt.cats where is_female group by human order by human"
             .parse()
             .unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let expected_result = owned_table([
@@ -715,22 +694,17 @@ fn we_can_prove_a_cat_group_by_query_with_dynamic_dory() {
         "select diff_from_ideal_weight, count(*) as num_cats from sxt.cats where is_female group by diff_from_ideal_weight order by diff_from_ideal_weight"
             .parse()
             .unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) = QueryProof::<DynamicDoryEvaluationProof>::new(
+    let verifiable_result = VerifiableQueryResult::<DynamicDoryEvaluationProof>::new(
         query.proof_expr(),
         &accessor,
         &&prover_setup,
     );
-    let owned_table_result = proof
-        .verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &&verifier_setup,
-        )
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &&verifier_setup)
         .unwrap()
         .table;
     let expected_result = owned_table([
@@ -763,19 +737,17 @@ fn we_can_prove_a_basic_group_by_query_with_dory() {
         "SELECT a, sum(2 * b + 1) as d, count(*) as e FROM table WHERE c >= 0 group by a"
             .parse()
             .unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<DoryEvaluationProof>::new(query.proof_expr(), &accessor, &dory_prover_setup);
-    let owned_table_result = proof
-        .verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &dory_verifier_setup,
-        )
+    let verifiable_result = VerifiableQueryResult::<DoryEvaluationProof>::new(
+        query.proof_expr(),
+        &accessor,
+        &dory_prover_setup,
+    );
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &dory_verifier_setup)
         .unwrap()
         .table;
     let expected_result = owned_table([
@@ -798,14 +770,14 @@ fn we_can_prove_a_query_with_overflow_with_curve25519() {
     );
     let query = QueryExpr::try_new(
         "SELECT a + b as c from table".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
     assert!(matches!(
-        proof.verify(query.proof_expr(), &accessor, &serialized_result, &()),
+        verifiable_result.verify(query.proof_expr(), &accessor, &()),
         Err(QueryError::Overflow)
     ));
 }
@@ -827,19 +799,17 @@ fn we_can_prove_a_query_with_overflow_with_dory() {
     );
     let query = QueryExpr::try_new(
         "SELECT a - b as c from table".parse().unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<DoryEvaluationProof>::new(query.proof_expr(), &accessor, &dory_prover_setup);
+    let verifiable_result = VerifiableQueryResult::<DoryEvaluationProof>::new(
+        query.proof_expr(),
+        &accessor,
+        &dory_prover_setup,
+    );
     assert!(matches!(
-        proof.verify(
-            query.proof_expr(),
-            &accessor,
-            &serialized_result,
-            &dory_verifier_setup
-        ),
+        verifiable_result.verify(query.proof_expr(), &accessor, &dory_verifier_setup,),
         Err(QueryError::Overflow)
     ));
 }
@@ -861,14 +831,14 @@ fn we_can_perform_arithmetic_and_conditional_operations_on_tinyint() {
         "SELECT a*b+b+c as result FROM table WHERE a>b OR c=4"
             .parse()
             .unwrap(),
-        "sxt".parse().unwrap(),
+        "sxt".into(),
         &accessor,
     )
     .unwrap();
-    let (proof, serialized_result) =
-        QueryProof::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
-    let owned_table_result = proof
-        .verify(query.proof_expr(), &accessor, &serialized_result, &())
+    let verifiable_result =
+        VerifiableQueryResult::<InnerProductProof>::new(query.proof_expr(), &accessor, &());
+    let owned_table_result = verifiable_result
+        .verify(query.proof_expr(), &accessor, &())
         .unwrap()
         .table;
     let expected_result = owned_table([tinyint("result", [9_i8, 10])]);

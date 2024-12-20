@@ -11,21 +11,22 @@ use crate::{
     },
     sql::{
         proof::{
-            exercise_verification, ProofPlan, ProvableQueryResult, ProverEvaluate,
-            VerifiableQueryResult,
+            exercise_verification, FirstRoundBuilder, ProofPlan, ProvableQueryResult,
+            ProverEvaluate, VerifiableQueryResult,
         },
         proof_exprs::{test_utility::*, ColumnExpr, DynProofExpr, TableExpr},
     },
 };
 use blitzar::proof::InnerProductProof;
 use bumpalo::Bump;
-use proof_of_sql_parser::{Identifier, ResourceId};
+use proof_of_sql_parser::ResourceId;
+use sqlparser::ast::Ident;
 
 #[test]
 fn we_can_correctly_fetch_the_query_result_schema() {
     let table_ref = TableRef::new(ResourceId::try_new("sxt", "sxt_tab").unwrap());
-    let a = Identifier::try_new("a").unwrap();
-    let b = Identifier::try_new("b").unwrap();
+    let a = Ident::new("a");
+    let b = Ident::new("b");
     let provable_ast = ProjectionExec::new(
         vec![
             aliased_plan(
@@ -51,8 +52,8 @@ fn we_can_correctly_fetch_the_query_result_schema() {
     assert_eq!(
         column_fields,
         vec![
-            ColumnField::new("a".parse().unwrap(), ColumnType::BigInt),
-            ColumnField::new("b".parse().unwrap(), ColumnType::BigInt),
+            ColumnField::new("a".into(), ColumnType::BigInt),
+            ColumnField::new("b".into(), ColumnType::BigInt),
         ]
     );
 }
@@ -60,8 +61,8 @@ fn we_can_correctly_fetch_the_query_result_schema() {
 #[test]
 fn we_can_correctly_fetch_all_the_referenced_columns() {
     let table_ref = TableRef::new(ResourceId::try_new("sxt", "sxt_tab").unwrap());
-    let a = Identifier::try_new("a").unwrap();
-    let f = Identifier::try_new("f").unwrap();
+    let a = Ident::new("a");
+    let f = Ident::new("f");
     let provable_ast = ProjectionExec::new(
         vec![
             aliased_plan(
@@ -89,16 +90,8 @@ fn we_can_correctly_fetch_all_the_referenced_columns() {
     assert_eq!(
         ref_columns,
         IndexSet::from_iter([
-            ColumnRef::new(
-                table_ref,
-                Identifier::try_new("a").unwrap(),
-                ColumnType::BigInt
-            ),
-            ColumnRef::new(
-                table_ref,
-                Identifier::try_new("f").unwrap(),
-                ColumnType::BigInt
-            ),
+            ColumnRef::new(table_ref, Ident::new("a"), ColumnType::BigInt),
+            ColumnRef::new(table_ref, Ident::new("f"), ColumnType::BigInt),
         ])
     );
 
@@ -154,7 +147,8 @@ fn we_can_prove_and_get_the_correct_result_from_a_nontrivial_projection() {
 }
 
 #[test]
-fn we_can_get_an_empty_result_from_a_basic_projection_on_an_empty_table_using_result_evaluate() {
+fn we_can_get_an_empty_result_from_a_basic_projection_on_an_empty_table_using_first_round_evaluate()
+{
     let alloc = Bump::new();
     let data = table([
         borrowed_bigint("a", [0; 0], &alloc),
@@ -163,6 +157,7 @@ fn we_can_get_an_empty_result_from_a_basic_projection_on_an_empty_table_using_re
         borrowed_varchar("d", [""; 0], &alloc),
         borrowed_scalar("e", [0; 0], &alloc),
     ]);
+    let data_length = data.num_rows();
     let t = "sxt.t".parse().unwrap();
     let table_map = indexmap! {
         t => data.clone()
@@ -172,18 +167,22 @@ fn we_can_get_an_empty_result_from_a_basic_projection_on_an_empty_table_using_re
     let expr: DynProofPlan =
         projection(cols_expr_plan(t, &["b", "c", "d", "e"], &accessor), tab(t));
     let fields = &[
-        ColumnField::new("b".parse().unwrap(), ColumnType::BigInt),
-        ColumnField::new("c".parse().unwrap(), ColumnType::Int128),
-        ColumnField::new("d".parse().unwrap(), ColumnType::VarChar),
+        ColumnField::new("b".into(), ColumnType::BigInt),
+        ColumnField::new("c".into(), ColumnType::Int128),
+        ColumnField::new("d".into(), ColumnType::VarChar),
         ColumnField::new(
-            "e".parse().unwrap(),
+            "e".into(),
             ColumnType::Decimal75(Precision::new(75).unwrap(), 0),
         ),
     ];
-    let res: OwnedTable<Curve25519Scalar> =
-        ProvableQueryResult::from(expr.result_evaluate(&alloc, &table_map).0)
-            .to_owned_table(fields)
-            .unwrap();
+    let first_round_builder = &mut FirstRoundBuilder::new(data_length);
+    let res: OwnedTable<Curve25519Scalar> = ProvableQueryResult::from(expr.first_round_evaluate(
+        first_round_builder,
+        &alloc,
+        &table_map,
+    ))
+    .to_owned_table(fields)
+    .unwrap();
     let expected: OwnedTable<Curve25519Scalar> = owned_table([
         bigint("b", [0; 0]),
         int128("c", [0; 0]),
@@ -195,7 +194,8 @@ fn we_can_get_an_empty_result_from_a_basic_projection_on_an_empty_table_using_re
 }
 
 #[test]
-fn we_can_get_no_columns_from_a_basic_projection_with_no_selected_columns_using_result_evaluate() {
+fn we_can_get_no_columns_from_a_basic_projection_with_no_selected_columns_using_first_round_evaluate(
+) {
     let alloc = Bump::new();
     let data = table([
         borrowed_bigint("a", [1, 4, 5, 2, 5], &alloc),
@@ -204,6 +204,7 @@ fn we_can_get_no_columns_from_a_basic_projection_with_no_selected_columns_using_
         borrowed_varchar("d", ["1", "2", "3", "4", "5"], &alloc),
         borrowed_scalar("e", [1, 2, 3, 4, 5], &alloc),
     ]);
+    let data_length = data.num_rows();
     let t = "sxt.t".parse().unwrap();
     let table_map = indexmap! {
         t => data.clone()
@@ -212,16 +213,20 @@ fn we_can_get_no_columns_from_a_basic_projection_with_no_selected_columns_using_
     accessor.add_table(t, data, 0);
     let expr: DynProofPlan = projection(cols_expr_plan(t, &[], &accessor), tab(t));
     let fields = &[];
-    let res: OwnedTable<Curve25519Scalar> =
-        ProvableQueryResult::from(expr.result_evaluate(&alloc, &table_map).0)
-            .to_owned_table(fields)
-            .unwrap();
+    let first_round_builder = &mut FirstRoundBuilder::new(data_length);
+    let res: OwnedTable<Curve25519Scalar> = ProvableQueryResult::from(expr.first_round_evaluate(
+        first_round_builder,
+        &alloc,
+        &table_map,
+    ))
+    .to_owned_table(fields)
+    .unwrap();
     let expected = OwnedTable::try_new(IndexMap::default()).unwrap();
     assert_eq!(res, expected);
 }
 
 #[test]
-fn we_can_get_the_correct_result_from_a_basic_projection_using_result_evaluate() {
+fn we_can_get_the_correct_result_from_a_basic_projection_using_first_round_evaluate() {
     let alloc = Bump::new();
     let data = table([
         borrowed_bigint("a", [1, 4, 5, 2, 5], &alloc),
@@ -230,6 +235,7 @@ fn we_can_get_the_correct_result_from_a_basic_projection_using_result_evaluate()
         borrowed_varchar("d", ["1", "2", "3", "4", "5"], &alloc),
         borrowed_scalar("e", [1, 2, 3, 4, 5], &alloc),
     ]);
+    let data_length = data.num_rows();
     let t = "sxt.t".parse().unwrap();
     let table_map = indexmap! {
         t => data.clone()
@@ -249,18 +255,22 @@ fn we_can_get_the_correct_result_from_a_basic_projection_using_result_evaluate()
         tab(t),
     );
     let fields = &[
-        ColumnField::new("b".parse().unwrap(), ColumnType::BigInt),
-        ColumnField::new("prod".parse().unwrap(), ColumnType::Int128),
-        ColumnField::new("d".parse().unwrap(), ColumnType::VarChar),
+        ColumnField::new("b".into(), ColumnType::BigInt),
+        ColumnField::new("prod".into(), ColumnType::Int128),
+        ColumnField::new("d".into(), ColumnType::VarChar),
         ColumnField::new(
-            "e".parse().unwrap(),
+            "e".into(),
             ColumnType::Decimal75(Precision::new(1).unwrap(), 0),
         ),
     ];
-    let res: OwnedTable<Curve25519Scalar> =
-        ProvableQueryResult::from(expr.result_evaluate(&alloc, &table_map).0)
-            .to_owned_table(fields)
-            .unwrap();
+    let first_round_builder = &mut FirstRoundBuilder::new(data_length);
+    let res: OwnedTable<Curve25519Scalar> = ProvableQueryResult::from(expr.first_round_evaluate(
+        first_round_builder,
+        &alloc,
+        &table_map,
+    ))
+    .to_owned_table(fields)
+    .unwrap();
     let expected: OwnedTable<Curve25519Scalar> = owned_table([
         bigint("b", [2, 3, 4, 5, 6]),
         int128("prod", [1, 4, 9, 16, 25]),

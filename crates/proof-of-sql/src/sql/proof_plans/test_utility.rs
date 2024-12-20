@@ -1,8 +1,19 @@
-use super::{DynProofPlan, FilterExec, GroupByExec, ProjectionExec, TableExec};
+use super::{
+    DynProofPlan, EmptyExec, FilterExec, GroupByExec, ProjectionExec, SliceExec, TableExec,
+    UnionExec,
+};
 use crate::{
-    base::database::{ColumnField, TableRef},
+    base::database::{ColumnField, ColumnType, TableRef},
     sql::proof_exprs::{AliasedDynProofExpr, ColumnExpr, DynProofExpr, TableExpr},
 };
+
+pub fn column_field(name: &str, column_type: ColumnType) -> ColumnField {
+    ColumnField::new(name.into(), column_type)
+}
+
+pub fn empty_exec() -> DynProofPlan {
+    DynProofPlan::Empty(EmptyExec::new())
+}
 
 pub fn table_exec(table_ref: TableRef, schema: Vec<ColumnField>) -> DynProofPlan {
     DynProofPlan::Table(TableExec::new(table_ref, schema))
@@ -33,8 +44,16 @@ pub fn group_by(
     DynProofPlan::GroupBy(GroupByExec::new(
         group_by_exprs,
         sum_expr,
-        count_alias.parse().unwrap(),
+        count_alias.into(),
         table,
         where_clause,
     ))
+}
+
+pub fn slice_exec(input: DynProofPlan, skip: usize, fetch: Option<usize>) -> DynProofPlan {
+    DynProofPlan::Slice(SliceExec::new(Box::new(input), skip, fetch))
+}
+
+pub fn union_exec(inputs: Vec<DynProofPlan>, schema: Vec<ColumnField>) -> DynProofPlan {
+    DynProofPlan::Union(UnionExec::new(inputs, schema))
 }

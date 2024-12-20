@@ -1,8 +1,7 @@
-use super::{
-    CountBuilder, FinalRoundBuilder, ProofPlan, ProverEvaluate, QueryProof, VerificationBuilder,
-};
+use super::{FinalRoundBuilder, ProofPlan, ProverEvaluate, QueryProof, VerificationBuilder};
 use crate::{
     base::{
+        bit::BitDistribution,
         commitment::InnerProductProof,
         database::{
             owned_table_utility::{bigint, owned_table},
@@ -17,8 +16,8 @@ use crate::{
     sql::proof::{FirstRoundBuilder, QueryData, SumcheckSubpolynomialType},
 };
 use bumpalo::Bump;
-use proof_of_sql_parser::Identifier;
 use serde::Serialize;
+use sqlparser::ast::Ident;
 
 /// Type to allow us to prove and verify an artificial polynomial where we prove
 /// that every entry in the result is zero
@@ -28,7 +27,8 @@ struct TrivialTestProofPlan {
     offset: usize,
     column_fill_value: i64,
     evaluation: i64,
-    anchored_mle_count: usize,
+    produce_length: bool,
+    bit_distribution: Option<BitDistribution>,
 }
 impl Default for TrivialTestProofPlan {
     fn default() -> Self {
@@ -37,24 +37,27 @@ impl Default for TrivialTestProofPlan {
             offset: 0,
             column_fill_value: 0,
             evaluation: 0,
-            anchored_mle_count: 0,
+            produce_length: true,
+            bit_distribution: Some(BitDistribution {
+                or_all: [0; 4],
+                vary_mask: [0; 4],
+            }),
         }
     }
 }
 impl ProverEvaluate for TrivialTestProofPlan {
-    fn result_evaluate<'a, S: Scalar>(
+    fn first_round_evaluate<'a, S: Scalar>(
         &self,
+        builder: &mut FirstRoundBuilder<'a, S>,
         alloc: &'a Bump,
         _table_map: &IndexMap<TableRef, Table<'a, S>>,
-    ) -> (Table<'a, S>, Vec<usize>) {
+    ) -> Table<'a, S> {
         let col = vec![self.column_fill_value; self.length];
-        (
-            table([borrowed_bigint("a1", col, alloc)]),
-            vec![self.length],
-        )
+        if self.produce_length {
+            builder.produce_one_evaluation_length(self.length);
+        }
+        table([borrowed_bigint("a1", col, alloc)])
     }
-
-    fn first_round_evaluate(&self, _builder: &mut FirstRoundBuilder) {}
 
     fn final_round_evaluate<'a, S: Scalar>(
         &self,
@@ -68,6 +71,9 @@ impl ProverEvaluate for TrivialTestProofPlan {
             SumcheckSubpolynomialType::Identity,
             vec![(S::ONE, vec![Box::new(col as &[_])])],
         );
+        if let Some(bit_distribution) = &self.bit_distribution {
+            builder.produce_bit_distribution(bit_distribution.clone());
+        }
         table([borrowed_bigint(
             "a1",
             vec![self.column_fill_value; self.length],
@@ -76,13 +82,6 @@ impl ProverEvaluate for TrivialTestProofPlan {
     }
 }
 impl ProofPlan for TrivialTestProofPlan {
-    fn count(&self, builder: &mut CountBuilder) -> Result<(), ProofError> {
-        builder.count_degree(2);
-        builder.count_intermediate_mles(1);
-        builder.count_subpolynomials(1);
-        builder.count_anchored_mles(self.anchored_mle_count);
-        Ok(())
-    }
     fn verifier_evaluate<S: Scalar>(
         &self,
         builder: &mut VerificationBuilder<S>,
@@ -90,14 +89,16 @@ impl ProofPlan for TrivialTestProofPlan {
         _result: Option<&OwnedTable<S>>,
         _one_eval_map: &IndexMap<TableRef, S>,
     ) -> Result<TableEvaluation<S>, ProofError> {
-        assert_eq!(builder.consume_intermediate_mle(), S::ZERO);
-        builder.produce_sumcheck_subpolynomial_evaluation(
-            &SumcheckSubpolynomialType::ZeroSum,
+        assert_eq!(builder.try_consume_final_round_mle_evaluation()?, S::ZERO);
+        builder.try_produce_sumcheck_subpolynomial_evaluation(
+            SumcheckSubpolynomialType::ZeroSum,
             S::from(self.evaluation),
-        );
+            1,
+        )?;
+        let _ = builder.try_consume_bit_distribution()?;
         Ok(TableEvaluation::new(
             vec![S::ZERO],
-            builder.consume_one_evaluation(),
+            builder.try_consume_one_evaluation()?,
         ))
     }
     ///
@@ -105,7 +106,7 @@ impl ProofPlan for TrivialTestProofPlan {
     ///
     /// This method will panic if the `ColumnField` cannot be created from the provided column name (e.g., if the name parsing fails).
     fn get_column_result_fields(&self) -> Vec<ColumnField> {
-        vec![ColumnField::new("a1".parse().unwrap(), ColumnType::BigInt)]
+        vec![ColumnField::new("a1".into(), ColumnType::BigInt)]
     }
     fn get_column_references(&self) -> IndexSet<ColumnRef> {
         indexset! {}
@@ -132,7 +133,10 @@ fn verify_a_trivial_query_proof_with_given_offset(n: usize, offset_generators: u
     let QueryData {
         verification_hash,
         table,
-    } = proof.verify(&expr, &accessor, &result, &()).unwrap();
+    } = proof
+        .clone()
+        .verify(&expr, &accessor, result.clone(), &())
+        .unwrap();
     assert_ne!(verification_hash, [0; 32]);
     let expected_result = owned_table([bigint("a1", column)]);
     assert_eq!(table, expected_result);
@@ -166,7 +170,7 @@ fn verify_fails_if_the_summation_in_sumcheck_isnt_zero() {
         (),
     );
     let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 #[test]
@@ -184,7 +188,7 @@ fn verify_fails_if_the_sumcheck_evaluation_isnt_correct() {
         (),
     );
     let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 #[test]
@@ -192,7 +196,7 @@ fn verify_fails_if_counts_dont_match() {
     // prove and verify an artificial polynomial where we try to prove
     // that every entry in the result is zero
     let expr = TrivialTestProofPlan {
-        anchored_mle_count: 1,
+        produce_length: false,
         ..Default::default()
     };
     let accessor = OwnedTableTestAccessor::<InnerProductProof>::new_from_table(
@@ -202,7 +206,42 @@ fn verify_fails_if_counts_dont_match() {
         (),
     );
     let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
+}
+
+#[test]
+fn verify_fails_if_the_number_of_bit_distributions_is_not_enough() {
+    let expr = TrivialTestProofPlan {
+        bit_distribution: None,
+        ..Default::default()
+    };
+    let accessor = OwnedTableTestAccessor::<InnerProductProof>::new_from_table(
+        "sxt.test".parse().unwrap(),
+        owned_table([bigint("a1", [0_i64; 2])]),
+        0,
+        (),
+    );
+    let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
+}
+
+#[test]
+fn verify_fails_if_a_bit_distribution_is_invalid() {
+    let expr = TrivialTestProofPlan {
+        bit_distribution: Some(BitDistribution {
+            or_all: [1; 4],
+            vary_mask: [1; 4],
+        }),
+        ..Default::default()
+    };
+    let accessor = OwnedTableTestAccessor::<InnerProductProof>::new_from_table(
+        "sxt.test".parse().unwrap(),
+        owned_table([bigint("a1", [0_i64; 2])]),
+        0,
+        (),
+    );
+    let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 /// prove and verify an artificial query where
@@ -222,15 +261,15 @@ impl Default for SquareTestProofPlan {
     }
 }
 impl ProverEvaluate for SquareTestProofPlan {
-    fn result_evaluate<'a, S: Scalar>(
+    fn first_round_evaluate<'a, S: Scalar>(
         &self,
+        builder: &mut FirstRoundBuilder<'a, S>,
         alloc: &'a Bump,
         _table_map: &IndexMap<TableRef, Table<'a, S>>,
-    ) -> (Table<'a, S>, Vec<usize>) {
-        (table([borrowed_bigint("a1", self.res, alloc)]), vec![2])
+    ) -> Table<'a, S> {
+        builder.produce_one_evaluation_length(2);
+        table([borrowed_bigint("a1", self.res, alloc)])
     }
-
-    fn first_round_evaluate(&self, _builder: &mut FirstRoundBuilder) {}
 
     fn final_round_evaluate<'a, S: Scalar>(
         &self,
@@ -242,7 +281,7 @@ impl ProverEvaluate for SquareTestProofPlan {
             .get(&TableRef::new("sxt.test".parse().unwrap()))
             .unwrap()
             .inner_table()
-            .get(&"x".parse::<Identifier>().unwrap())
+            .get(&Ident::new("x"))
             .unwrap();
         let res: &[_] = alloc.alloc_slice_copy(&self.res);
         builder.produce_intermediate_mle(res);
@@ -257,12 +296,6 @@ impl ProverEvaluate for SquareTestProofPlan {
     }
 }
 impl ProofPlan for SquareTestProofPlan {
-    fn count(&self, builder: &mut CountBuilder) -> Result<(), ProofError> {
-        builder.count_degree(3);
-        builder.count_intermediate_mles(1);
-        builder.count_subpolynomials(1);
-        Ok(())
-    }
     fn verifier_evaluate<S: Scalar>(
         &self,
         builder: &mut VerificationBuilder<S>,
@@ -274,27 +307,28 @@ impl ProofPlan for SquareTestProofPlan {
             * *accessor
                 .get(&ColumnRef::new(
                     "sxt.test".parse().unwrap(),
-                    "x".parse().unwrap(),
+                    "x".into(),
                     ColumnType::BigInt,
                 ))
                 .unwrap();
-        let res_eval = builder.consume_intermediate_mle();
-        builder.produce_sumcheck_subpolynomial_evaluation(
-            &SumcheckSubpolynomialType::Identity,
+        let res_eval = builder.try_consume_final_round_mle_evaluation()?;
+        builder.try_produce_sumcheck_subpolynomial_evaluation(
+            SumcheckSubpolynomialType::Identity,
             res_eval - x_eval * x_eval,
-        );
+            2,
+        )?;
         Ok(TableEvaluation::new(
             vec![res_eval],
-            builder.consume_one_evaluation(),
+            builder.try_consume_one_evaluation()?,
         ))
     }
     fn get_column_result_fields(&self) -> Vec<ColumnField> {
-        vec![ColumnField::new("a1".parse().unwrap(), ColumnType::BigInt)]
+        vec![ColumnField::new("a1".into(), ColumnType::BigInt)]
     }
     fn get_column_references(&self) -> IndexSet<ColumnRef> {
         indexset! {ColumnRef::new(
             "sxt.test".parse().unwrap(),
-            "x".parse().unwrap(),
+            "x".into(),
             ColumnType::BigInt,
         )}
     }
@@ -320,7 +354,10 @@ fn verify_a_proof_with_an_anchored_commitment_and_given_offset(offset_generators
     let QueryData {
         verification_hash,
         table,
-    } = proof.verify(&expr, &accessor, &result, &()).unwrap();
+    } = proof
+        .clone()
+        .verify(&expr, &accessor, result.clone(), &())
+        .unwrap();
     assert_ne!(verification_hash, [0; 32]);
     let expected_result = owned_table([bigint("a1", [9, 25])]);
     assert_eq!(table, expected_result);
@@ -332,7 +369,7 @@ fn verify_a_proof_with_an_anchored_commitment_and_given_offset(offset_generators
         offset_generators + 1,
         (),
     );
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 #[test]
@@ -363,7 +400,7 @@ fn verify_fails_if_the_result_doesnt_satisfy_an_anchored_equation() {
         (),
     );
     let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 #[test]
@@ -382,7 +419,7 @@ fn verify_fails_if_the_anchored_commitment_doesnt_match() {
         (),
     );
     let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 // prove and verify an artificial query where
@@ -403,15 +440,15 @@ impl Default for DoubleSquareTestProofPlan {
     }
 }
 impl ProverEvaluate for DoubleSquareTestProofPlan {
-    fn result_evaluate<'a, S: Scalar>(
+    fn first_round_evaluate<'a, S: Scalar>(
         &self,
+        builder: &mut FirstRoundBuilder<'a, S>,
         alloc: &'a Bump,
         _table_map: &IndexMap<TableRef, Table<'a, S>>,
-    ) -> (Table<'a, S>, Vec<usize>) {
-        (table([borrowed_bigint("a1", self.res, alloc)]), vec![2])
+    ) -> Table<'a, S> {
+        builder.produce_one_evaluation_length(2);
+        table([borrowed_bigint("a1", self.res, alloc)])
     }
-
-    fn first_round_evaluate(&self, _builder: &mut FirstRoundBuilder) {}
 
     fn final_round_evaluate<'a, S: Scalar>(
         &self,
@@ -423,7 +460,7 @@ impl ProverEvaluate for DoubleSquareTestProofPlan {
             .get(&TableRef::new("sxt.test".parse().unwrap()))
             .unwrap()
             .inner_table()
-            .get(&"x".parse::<Identifier>().unwrap())
+            .get(&Ident::new("x"))
             .unwrap();
         let res: &[_] = alloc.alloc_slice_copy(&self.res);
         let z: &[_] = alloc.alloc_slice_copy(&self.z);
@@ -451,12 +488,6 @@ impl ProverEvaluate for DoubleSquareTestProofPlan {
     }
 }
 impl ProofPlan for DoubleSquareTestProofPlan {
-    fn count(&self, builder: &mut CountBuilder) -> Result<(), ProofError> {
-        builder.count_degree(3);
-        builder.count_intermediate_mles(2);
-        builder.count_subpolynomials(2);
-        Ok(())
-    }
     fn verifier_evaluate<S: Scalar>(
         &self,
         builder: &mut VerificationBuilder<S>,
@@ -467,36 +498,38 @@ impl ProofPlan for DoubleSquareTestProofPlan {
         let x_eval = *accessor
             .get(&ColumnRef::new(
                 "sxt.test".parse().unwrap(),
-                "x".parse().unwrap(),
+                "x".into(),
                 ColumnType::BigInt,
             ))
             .unwrap();
-        let z_eval = builder.consume_intermediate_mle();
-        let res_eval = builder.consume_intermediate_mle();
+        let z_eval = builder.try_consume_final_round_mle_evaluation()?;
+        let res_eval = builder.try_consume_final_round_mle_evaluation()?;
 
         // poly1
-        builder.produce_sumcheck_subpolynomial_evaluation(
-            &SumcheckSubpolynomialType::Identity,
+        builder.try_produce_sumcheck_subpolynomial_evaluation(
+            SumcheckSubpolynomialType::Identity,
             z_eval - x_eval * x_eval,
-        );
+            2,
+        )?;
 
         // poly2
-        builder.produce_sumcheck_subpolynomial_evaluation(
-            &SumcheckSubpolynomialType::Identity,
+        builder.try_produce_sumcheck_subpolynomial_evaluation(
+            SumcheckSubpolynomialType::Identity,
             res_eval - z_eval * z_eval,
-        );
+            2,
+        )?;
         Ok(TableEvaluation::new(
             vec![res_eval],
-            builder.consume_one_evaluation(),
+            builder.try_consume_one_evaluation()?,
         ))
     }
     fn get_column_result_fields(&self) -> Vec<ColumnField> {
-        vec![ColumnField::new("a1".parse().unwrap(), ColumnType::BigInt)]
+        vec![ColumnField::new("a1".into(), ColumnType::BigInt)]
     }
     fn get_column_references(&self) -> IndexSet<ColumnRef> {
         indexset! {ColumnRef::new(
             "sxt.test".parse().unwrap(),
-            "x".parse().unwrap(),
+            "x".into(),
             ColumnType::BigInt,
         )}
     }
@@ -523,7 +556,10 @@ fn verify_a_proof_with_an_intermediate_commitment_and_given_offset(offset_genera
     let QueryData {
         verification_hash,
         table,
-    } = proof.verify(&expr, &accessor, &result, &()).unwrap();
+    } = proof
+        .clone()
+        .verify(&expr, &accessor, result.clone(), &())
+        .unwrap();
     assert_ne!(verification_hash, [0; 32]);
     let expected_result = owned_table([bigint("a1", [81, 625])]);
     assert_eq!(table, expected_result);
@@ -535,7 +571,7 @@ fn verify_a_proof_with_an_intermediate_commitment_and_given_offset(offset_genera
         offset_generators + 1,
         (),
     );
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 #[test]
@@ -564,8 +600,9 @@ fn verify_fails_if_an_intermediate_commitment_doesnt_match() {
         (),
     );
     let (mut proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
-    proof.commitments[0] = proof.commitments[0] * Curve25519Scalar::from(2u64);
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    proof.final_round_commitments[0] =
+        proof.final_round_commitments[0] * Curve25519Scalar::from(2u64);
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 #[test]
@@ -586,7 +623,7 @@ fn verify_fails_if_an_intermediate_equation_isnt_satified() {
         (),
     );
     let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 #[test]
@@ -608,22 +645,21 @@ fn verify_fails_the_result_doesnt_satisfy_an_intermediate_equation() {
         (),
     );
     let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 #[derive(Debug, Serialize)]
 struct ChallengeTestProofPlan {}
 impl ProverEvaluate for ChallengeTestProofPlan {
-    fn result_evaluate<'a, S: Scalar>(
+    fn first_round_evaluate<'a, S: Scalar>(
         &self,
+        builder: &mut FirstRoundBuilder<'a, S>,
         alloc: &'a Bump,
         _table_map: &IndexMap<TableRef, Table<'a, S>>,
-    ) -> (Table<'a, S>, Vec<usize>) {
-        (table([borrowed_bigint("a1", [9, 25], alloc)]), vec![2])
-    }
-
-    fn first_round_evaluate(&self, builder: &mut FirstRoundBuilder) {
+    ) -> Table<'a, S> {
         builder.request_post_result_challenges(2);
+        builder.produce_one_evaluation_length(2);
+        table([borrowed_bigint("a1", [9, 25], alloc)])
     }
 
     fn final_round_evaluate<'a, S: Scalar>(
@@ -636,7 +672,7 @@ impl ProverEvaluate for ChallengeTestProofPlan {
             .get(&TableRef::new("sxt.test".parse().unwrap()))
             .unwrap()
             .inner_table()
-            .get(&"x".parse::<Identifier>().unwrap())
+            .get(&Ident::new("x"))
             .unwrap();
         let res: &[_] = alloc.alloc_slice_copy(&[9, 25]);
         let alpha = builder.consume_post_result_challenge();
@@ -653,13 +689,6 @@ impl ProverEvaluate for ChallengeTestProofPlan {
     }
 }
 impl ProofPlan for ChallengeTestProofPlan {
-    fn count(&self, builder: &mut CountBuilder) -> Result<(), ProofError> {
-        builder.count_degree(3);
-        builder.count_intermediate_mles(1);
-        builder.count_subpolynomials(1);
-        builder.count_post_result_challenges(2);
-        Ok(())
-    }
     fn verifier_evaluate<S: Scalar>(
         &self,
         builder: &mut VerificationBuilder<S>,
@@ -667,32 +696,33 @@ impl ProofPlan for ChallengeTestProofPlan {
         _result: Option<&OwnedTable<S>>,
         _one_eval_map: &IndexMap<TableRef, S>,
     ) -> Result<TableEvaluation<S>, ProofError> {
-        let alpha = builder.consume_post_result_challenge();
-        let _beta = builder.consume_post_result_challenge();
+        let alpha = builder.try_consume_post_result_challenge()?;
+        let _beta = builder.try_consume_post_result_challenge()?;
         let x_eval = *accessor
             .get(&ColumnRef::new(
                 "sxt.test".parse().unwrap(),
-                "x".parse().unwrap(),
+                "x".into(),
                 ColumnType::BigInt,
             ))
             .unwrap();
-        let res_eval = builder.consume_intermediate_mle();
-        builder.produce_sumcheck_subpolynomial_evaluation(
-            &SumcheckSubpolynomialType::Identity,
+        let res_eval = builder.try_consume_final_round_mle_evaluation()?;
+        builder.try_produce_sumcheck_subpolynomial_evaluation(
+            SumcheckSubpolynomialType::Identity,
             alpha * res_eval - alpha * x_eval * x_eval,
-        );
+            2,
+        )?;
         Ok(TableEvaluation::new(
             vec![res_eval],
-            builder.consume_one_evaluation(),
+            builder.try_consume_one_evaluation()?,
         ))
     }
     fn get_column_result_fields(&self) -> Vec<ColumnField> {
-        vec![ColumnField::new("a1".parse().unwrap(), ColumnType::BigInt)]
+        vec![ColumnField::new("a1".into(), ColumnType::BigInt)]
     }
     fn get_column_references(&self) -> IndexSet<ColumnRef> {
         indexset! {ColumnRef::new(
             "sxt.test".parse().unwrap(),
-            "x".parse().unwrap(),
+            "x".into(),
             ColumnType::BigInt,
         )}
     }
@@ -717,7 +747,10 @@ fn verify_a_proof_with_a_post_result_challenge_and_given_offset(offset_generator
     let QueryData {
         verification_hash,
         table,
-    } = proof.verify(&expr, &accessor, &result, &()).unwrap();
+    } = proof
+        .clone()
+        .verify(&expr, &accessor, result.clone(), &())
+        .unwrap();
     assert_ne!(verification_hash, [0; 32]);
     let expected_result = owned_table([bigint("a1", [9, 25])]);
     assert_eq!(table, expected_result);
@@ -729,7 +762,7 @@ fn verify_a_proof_with_a_post_result_challenge_and_given_offset(offset_generator
         offset_generators + 1,
         (),
     );
-    assert!(proof.verify(&expr, &accessor, &result, &()).is_err());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }
 
 #[test]
@@ -740,4 +773,186 @@ fn we_can_verify_a_proof_with_a_post_result_challenge_and_with_a_zero_offset() {
 #[test]
 fn we_can_verify_a_proof_with_a_post_result_challenge_and_with_a_non_zero_offset() {
     verify_a_proof_with_a_post_result_challenge_and_given_offset(123);
+}
+
+/// prove and verify an artificial query where
+///     `res_i = x_i * x_i`
+/// where the commitment for x is known
+#[derive(Debug, Serialize)]
+struct FirstRoundSquareTestProofPlan {
+    res: [i64; 2],
+    anchored_commit_multiplier: i64,
+}
+impl Default for FirstRoundSquareTestProofPlan {
+    fn default() -> Self {
+        Self {
+            res: [9, 25],
+            anchored_commit_multiplier: 1,
+        }
+    }
+}
+impl ProverEvaluate for FirstRoundSquareTestProofPlan {
+    fn first_round_evaluate<'a, S: Scalar>(
+        &self,
+        builder: &mut FirstRoundBuilder<'a, S>,
+        alloc: &'a Bump,
+        _table_map: &IndexMap<TableRef, Table<'a, S>>,
+    ) -> Table<'a, S> {
+        let res: &[_] = alloc.alloc_slice_copy(&self.res);
+        builder.produce_intermediate_mle(res);
+        builder.produce_one_evaluation_length(2);
+        table([borrowed_bigint("a1", self.res, alloc)])
+    }
+
+    fn final_round_evaluate<'a, S: Scalar>(
+        &self,
+        builder: &mut FinalRoundBuilder<'a, S>,
+        alloc: &'a Bump,
+        table_map: &IndexMap<TableRef, Table<'a, S>>,
+    ) -> Table<'a, S> {
+        let x = *table_map
+            .get(&TableRef::new("sxt.test".parse().unwrap()))
+            .unwrap()
+            .inner_table()
+            .get(&Ident::new("x"))
+            .unwrap();
+        let res: &[_] = alloc.alloc_slice_copy(&self.res);
+        builder.produce_intermediate_mle(res);
+        builder.produce_sumcheck_subpolynomial(
+            SumcheckSubpolynomialType::Identity,
+            vec![
+                (S::ONE, vec![Box::new(res)]),
+                (-S::ONE, vec![Box::new(x), Box::new(x)]),
+            ],
+        );
+        table([borrowed_bigint("a1", self.res, alloc)])
+    }
+}
+impl ProofPlan for FirstRoundSquareTestProofPlan {
+    fn verifier_evaluate<S: Scalar>(
+        &self,
+        builder: &mut VerificationBuilder<S>,
+        accessor: &IndexMap<ColumnRef, S>,
+        _result: Option<&OwnedTable<S>>,
+        _one_eval_map: &IndexMap<TableRef, S>,
+    ) -> Result<TableEvaluation<S>, ProofError> {
+        let x_eval = S::from(self.anchored_commit_multiplier)
+            * *accessor
+                .get(&ColumnRef::new(
+                    "sxt.test".parse().unwrap(),
+                    "x".into(),
+                    ColumnType::BigInt,
+                ))
+                .unwrap();
+        let first_round_res_eval = builder.try_consume_first_round_mle_evaluation()?;
+        let final_round_res_eval = builder.try_consume_final_round_mle_evaluation()?;
+        assert_eq!(first_round_res_eval, final_round_res_eval);
+        builder.try_produce_sumcheck_subpolynomial_evaluation(
+            SumcheckSubpolynomialType::Identity,
+            final_round_res_eval - x_eval * x_eval,
+            2,
+        )?;
+        Ok(TableEvaluation::new(
+            vec![final_round_res_eval],
+            builder.try_consume_one_evaluation()?,
+        ))
+    }
+    fn get_column_result_fields(&self) -> Vec<ColumnField> {
+        vec![ColumnField::new("a1".into(), ColumnType::BigInt)]
+    }
+    fn get_column_references(&self) -> IndexSet<ColumnRef> {
+        indexset! {ColumnRef::new(
+            "sxt.test".parse().unwrap(),
+            "x".into(),
+            ColumnType::BigInt,
+        )}
+    }
+    fn get_table_references(&self) -> IndexSet<TableRef> {
+        indexset! {TableRef::new("sxt.test".parse().unwrap())}
+    }
+}
+
+fn verify_a_proof_with_a_commitment_and_given_offset(offset_generators: usize) {
+    // prove and verify an artificial query where
+    //     res_i = x_i * x_i
+    // where the commitment for x is known
+    let expr = FirstRoundSquareTestProofPlan {
+        ..Default::default()
+    };
+    let accessor = OwnedTableTestAccessor::<InnerProductProof>::new_from_table(
+        "sxt.test".parse().unwrap(),
+        owned_table([bigint("x", [3, 5])]),
+        offset_generators,
+        (),
+    );
+    let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
+    let QueryData {
+        verification_hash,
+        table,
+    } = proof
+        .clone()
+        .verify(&expr, &accessor, result.clone(), &())
+        .unwrap();
+    assert_ne!(verification_hash, [0; 32]);
+    let expected_result = owned_table([bigint("a1", [9, 25])]);
+    assert_eq!(table, expected_result);
+
+    // invalid offset will fail to verify
+    let accessor = OwnedTableTestAccessor::<InnerProductProof>::new_from_table(
+        "sxt.test".parse().unwrap(),
+        owned_table([bigint("x", [3, 5])]),
+        offset_generators + 1,
+        (),
+    );
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
+}
+
+#[test]
+fn we_can_verify_a_proof_with_a_commitment_and_with_a_zero_offset() {
+    verify_a_proof_with_a_commitment_and_given_offset(0);
+}
+
+#[test]
+fn we_can_verify_a_proof_with_a_commitment_and_with_a_non_zero_offset() {
+    verify_a_proof_with_a_commitment_and_given_offset(123);
+}
+
+#[test]
+fn verify_fails_if_the_result_doesnt_satisfy_an_equation() {
+    // attempt to prove and verify an artificial query where
+    //     res_i = x_i * x_i
+    // where the commitment for x is known and
+    //     res_i != x_i * x_i
+    // for some i
+    let expr = FirstRoundSquareTestProofPlan {
+        res: [9, 26],
+        ..Default::default()
+    };
+    let accessor = OwnedTableTestAccessor::<InnerProductProof>::new_from_table(
+        "sxt.test".parse().unwrap(),
+        owned_table([bigint("x", [3, 5])]),
+        0,
+        (),
+    );
+    let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
+}
+
+#[test]
+fn verify_fails_if_the_commitment_doesnt_match() {
+    // prove and verify an artificial query where
+    //     res_i = x_i * x_i
+    // where the commitment for x is known
+    let expr = FirstRoundSquareTestProofPlan {
+        anchored_commit_multiplier: 2,
+        ..Default::default()
+    };
+    let accessor = OwnedTableTestAccessor::<InnerProductProof>::new_from_table(
+        "sxt.test".parse().unwrap(),
+        owned_table([bigint("x", [3, 5])]),
+        0,
+        (),
+    );
+    let (proof, result) = QueryProof::<InnerProductProof>::new(&expr, &accessor, &());
+    assert!(proof.verify(&expr, &accessor, result, &()).is_err());
 }

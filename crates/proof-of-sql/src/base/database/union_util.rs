@@ -172,7 +172,7 @@ pub fn column_union<'a, S: Scalar>(
 /// # Panics
 /// This function should never panic as long as it is written correctly
 pub fn table_union<'a, S: Scalar>(
-    tables: &[&Table<'a, S>],
+    tables: &[Table<'a, S>],
     alloc: &'a Bump,
     schema: Vec<ColumnField>,
 ) -> TableOperationResult<Table<'a, S>> {
@@ -190,7 +190,7 @@ pub fn table_union<'a, S: Scalar>(
     }
     // Union the columns
     // Make sure to consider the case where the tables have no columns
-    let num_rows = tables.iter().map(|table| table.num_rows()).sum();
+    let num_rows = tables.iter().map(Table::num_rows).sum();
     let result = Table::<'a, S>::try_from_iter_with_options(
         schema.iter().enumerate().map(|(i, field)| {
             let columns: Vec<_> = tables
@@ -290,7 +290,7 @@ mod tests {
             TableOptions::new(Some(0)),
         )
         .unwrap();
-        let result = table_union(&[&table0, &table1, &table2], &alloc, vec![]).unwrap();
+        let result = table_union(&[table0, table1, table2], &alloc, vec![]).unwrap();
         assert_eq!(
             result,
             Table::<'_, TestScalar>::try_new_with_options(
@@ -307,26 +307,26 @@ mod tests {
         // Column names don't matter
         let table0 = Table::<'_, TestScalar>::try_new_with_options(
             IndexMap::from_iter(vec![
-                ("a".parse().unwrap(), Column::BigInt(&[1, 2, 3])),
-                ("b".parse().unwrap(), Column::BigInt(&[4, 5, 6])),
+                ("a".into(), Column::BigInt(&[1, 2, 3])),
+                ("b".into(), Column::BigInt(&[4, 5, 6])),
             ]),
             TableOptions::new(Some(3)),
         )
         .unwrap();
         let table1 = Table::<'_, TestScalar>::try_new_with_options(
             IndexMap::from_iter(vec![
-                ("c".parse().unwrap(), Column::BigInt(&[7, 8, 9])),
-                ("d".parse().unwrap(), Column::BigInt(&[10, 11, 12])),
+                ("c".into(), Column::BigInt(&[7, 8, 9])),
+                ("d".into(), Column::BigInt(&[10, 11, 12])),
             ]),
             TableOptions::new(Some(3)),
         )
         .unwrap();
         let result = table_union(
-            &[&table0, &table1],
+            &[table0, table1],
             &alloc,
             vec![
-                ColumnField::new("e".parse().unwrap(), ColumnType::BigInt),
-                ColumnField::new("f".parse().unwrap(), ColumnType::BigInt),
+                ColumnField::new("e".into(), ColumnType::BigInt),
+                ColumnField::new("f".into(), ColumnType::BigInt),
             ],
         )
         .unwrap();
@@ -334,8 +334,8 @@ mod tests {
             result,
             Table::<'_, TestScalar>::try_new_with_options(
                 IndexMap::from_iter(vec![
-                    ("e".parse().unwrap(), Column::BigInt(&[1, 2, 3, 7, 8, 9])),
-                    ("f".parse().unwrap(), Column::BigInt(&[4, 5, 6, 10, 11, 12])),
+                    ("e".into(), Column::BigInt(&[1, 2, 3, 7, 8, 9])),
+                    ("f".into(), Column::BigInt(&[4, 5, 6, 10, 11, 12])),
                 ]),
                 TableOptions::new(Some(6)),
             )
@@ -350,26 +350,26 @@ mod tests {
         // regardless of whether the tables have the same schema
         let table0 = Table::<'_, TestScalar>::try_new_with_options(
             IndexMap::from_iter(vec![
-                ("a".parse().unwrap(), Column::BigInt(&[1, 2, 3])),
-                ("b".parse().unwrap(), Column::BigInt(&[4, 5, 6])),
+                ("a".into(), Column::BigInt(&[1, 2, 3])),
+                ("b".into(), Column::BigInt(&[4, 5, 6])),
             ]),
             TableOptions::new(Some(3)),
         )
         .unwrap();
         let table1 = Table::<'_, TestScalar>::try_new_with_options(
             IndexMap::from_iter(vec![
-                ("c".parse().unwrap(), Column::BigInt(&[7, 8, 9])),
-                ("d".parse().unwrap(), Column::BigInt(&[10, 11, 12])),
+                ("c".into(), Column::BigInt(&[7, 8, 9])),
+                ("d".into(), Column::BigInt(&[10, 11, 12])),
             ]),
             TableOptions::new(Some(3)),
         )
         .unwrap();
         let result = table_union(
-            &[&table0, &table1],
+            &[table0, table1],
             &alloc,
             vec![
-                ColumnField::new("e".parse().unwrap(), ColumnType::BigInt),
-                ColumnField::new("f".parse().unwrap(), ColumnType::Int),
+                ColumnField::new("e".into(), ColumnType::BigInt),
+                ColumnField::new("f".into(), ColumnType::Int),
             ],
         );
         assert!(matches!(
